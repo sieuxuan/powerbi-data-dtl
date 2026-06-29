@@ -1,0 +1,123 @@
+# === KET NOI DATABASE ===
+database:
+  host: "${PG_HOST}"
+  port: 5432
+  name: "${PG_DATABASE}"
+  user: "${PG_USER}"
+  password: "${PG_PASSWORD}"
+  schema: "public"
+
+# === LICH TRINH ===
+schedule:
+  default_cron: "0 6 * * *"
+  timezone: "Asia/Ho_Chi_Minh"
+  on_startup: true
+
+# === DOWNLOAD TAM ===
+downloads:
+  dir: "./downloads"
+  keep_files: false
+
+# === API LOCAL CHO DASHBOARD ===
+api:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8765
+  cors_origins:
+    - "http://127.0.0.1:5173"
+    - "http://localhost:5173"
+
+# === RETRY MAC DINH ===
+retry:
+  db:
+    attempts: 3
+    delay_seconds: 10
+  file:
+    attempts: 2
+    delay_seconds: 2
+  onedrive:
+    attempts: 3
+    delay_seconds: 30
+
+# === CLEANUP / RETENTION ===
+maintenance:
+  enabled: true
+  sync_log_retention_days: 180
+  downloads_retention_days: 14
+  uploads_retention_days: 365
+  preview_cache_retention_days: 3
+
+# === DANH SACH FILE ===
+files:
+  - name: "Bao cao doanh thu"
+    source:
+      type: "local"
+      path: "C:/Users/Admin/OneDrive/BaoCao/doanh_thu.xlsx"
+    target:
+      table: "doanh_thu"
+      schema: "public"
+    options:
+      sheet: 0
+      header_row: 0              # 0 = dong dau tien; 4 = dong thu 5 lam header
+      skip_rows: []
+      usecols: null
+      skip_columns: []
+      encoding: "utf-8"
+      delimiter: ","
+      column_renames:
+        "Ma KH": "ma_kh"
+        "Doanh thu": "doanh_thu"
+    sync_mode: "truncate_insert"
+    on_column_mismatch: "notify"
+    skip_unchanged: true
+    cron: null                         # Legacy: 1 lịch. Ưu tiên dùng crons bên dưới.
+    crons:
+      - "0 6 * * *"
+      - "30 13 * * *"
+    enabled: false
+
+  - name: "Danh sach nhan vien"
+    source:
+      type: "onedrive"
+      share_url: "https://1drv.ms/x/s!AbcDefGhIjKl..."
+    target:
+      table: "nhan_vien"
+      schema: "public"
+      primary_key:
+        - "ma_nhan_vien"
+    options:
+      sheet: "Sheet1"
+      header_row: 0
+      skip_columns: []
+      column_renames: {}
+    sync_mode: "upsert"
+    on_column_mismatch: "auto_recreate"
+    skip_unchanged: true
+    crons:
+      - "0 7 * * 1-5"
+    enabled: false
+
+notifications:
+  windows_toast: true
+  email:
+    enabled: false
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    sender: "your@gmail.com"
+    password: "${SMTP_PASSWORD}"
+    recipients:
+      - "admin@company.com"
+  webhook:
+    enabled: false
+    url: ""
+    timeout_seconds: 15
+    statuses:
+      - "failed"
+      - "mismatch"
+
+logging:
+  level: "INFO"
+  file_dir: "./logs"
+  max_file_size_mb: 10
+  backup_count: 30
+  log_to_db: true
