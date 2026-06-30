@@ -174,7 +174,7 @@ export default function SyncMonitor({ onEditJob }) {
             <RefreshCcw size={15} aria-hidden="true" />
             Tải lại
           </button>
-          <div className="splitBtn" ref={allDropRef} style={{ position: "relative" }}>
+          <div className="splitBtn primary" ref={allDropRef} style={{ position: "relative" }}>
             <button type="button" className="splitMain" onClick={() => triggerRunAll(false)}>
               <Play size={15} aria-hidden="true" />
               Đồng bộ tất cả

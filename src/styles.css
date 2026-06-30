@@ -293,20 +293,15 @@ td input, td select { min-height: 34px; }
 .syncTable td small { display: block; margin-top: 3px; font-family: var(--ui); color: var(--ink-soft); font-size: 12px; }
 .logsTable { max-height: 360px; }
 
-.hashCell {
-  max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: var(--mono); font-size: 12px; color: var(--ink-soft);
-}
 .errorText { color: var(--err); font-size: 12px; font-family: var(--ui) !important; }
 
 /* Signature: status spine on the left edge of each job row */
 .jobRow td:first-child { box-shadow: inset 3px 0 0 transparent; }
 .jobRow.success  td:first-child { box-shadow: inset 3px 0 0 var(--ok-dot); }
-.jobRow.failed   td:first-child,
-.jobRow.idle     td:first-child { box-shadow: inset 3px 0 0 var(--idle-dot); }
 .jobRow.failed   td:first-child { box-shadow: inset 3px 0 0 var(--err-dot); }
 .jobRow.mismatch td:first-child { box-shadow: inset 3px 0 0 var(--warn-dot); }
-.jobRow.skipped  td:first-child { box-shadow: inset 3px 0 0 var(--idle-dot); }
+.jobRow.skipped  td:first-child,
+.jobRow.idle     td:first-child { box-shadow: inset 3px 0 0 var(--idle-dot); }
 .jobRow.running  td:first-child { box-shadow: inset 3px 0 0 var(--run-dot); }
 
 /* =====================================================================
@@ -349,7 +344,7 @@ td input, td select { min-height: 34px; }
   padding: 48px 40px; display: flex; flex-direction: column; align-items: center; gap: 14px;
   text-align: center; transition: border-color .15s, box-shadow .15s;
 }
-.uploadCard:hover, .uploadCard.dragging {
+.uploadCard:hover {
   border-color: var(--ink-faint);
   box-shadow: 0 0 0 4px rgba(11, 18, 32, 0.04);
 }

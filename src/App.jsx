@@ -616,39 +616,54 @@ function HistoryDropdown({ projects, onLoad, onRemove, onRefresh }) {
 
   return (
     <div className="dropdownWrap" ref={wrapRef}>
-      <button type="button" className="btn" onClick={() => { setOpen((value) => !value); onRefresh(); }}>
+      <button type="button" className="btn" onClick={() => setOpen((value) => { if (!value) onRefresh(); return !value; })}>
         <History size={15} aria-hidden="true" />
         Mở lại
         <ChevronDown size={13} aria-hidden="true" />
       </button>
       {open && (
-        <div className="dropdown" style={{ minWidth: 260 }}>
+        <div className="dropdown" style={{ minWidth: 280 }}>
           {recent.length === 0 && (
             <div style={{ padding: "12px", color: "var(--ink-soft)", fontSize: 13 }}>
               Chưa có file nào được lưu.
             </div>
           )}
           {recent.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => { onLoad(item.id); setOpen(false); }}
-              style={{ flexDirection: "column", alignItems: "flex-start", gap: 2 }}
-            >
-              <span style={{ fontWeight: 600, fontSize: 13 }}>{item.name}</span>
-              <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{item.fileName}</span>
-            </button>
+            <div key={item.id} style={{ display: "flex", alignItems: "stretch", gap: 2 }}>
+              <button
+                type="button"
+                onClick={() => { onLoad(item.id); setOpen(false); }}
+                style={{ flex: 1, minWidth: 0, flexDirection: "column", alignItems: "flex-start", gap: 2 }}
+              >
+                <span style={{ fontWeight: 600, fontSize: 13, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
+                <span style={{ fontSize: 12, color: "var(--ink-soft)", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.fileName}</span>
+              </button>
+              <button
+                type="button"
+                title="Xóa khỏi lịch sử"
+                aria-label={`Xóa ${item.name}`}
+                onClick={() => onRemove(item.id)}
+                style={{ flex: "0 0 auto", width: 34, justifyContent: "center", color: "var(--ink-faint)" }}
+              >
+                <Trash2 size={14} aria-hidden="true" />
+              </button>
+            </div>
           ))}
-          {recent.length > 0 && (
+          {projects.length > 6 && (
+            <div style={{ padding: "4px 12px", color: "var(--ink-faint)", fontSize: 12 }}>
+              Hiển thị 6 / {projects.length} file gần nhất
+            </div>
+          )}
+          {projects.length > 0 && (
             <>
               <hr />
               <button
                 type="button"
-                onClick={() => { recent.forEach((item) => onRemove(item.id)); setOpen(false); }}
+                onClick={() => { projects.forEach((item) => onRemove(item.id)); setOpen(false); }}
                 style={{ color: "var(--err)", fontSize: 12 }}
               >
                 <Trash2 size={13} aria-hidden="true" />
-                Xóa tất cả lịch sử
+                Xóa tất cả lịch sử ({projects.length})
               </button>
             </>
           )}
@@ -1194,8 +1209,12 @@ export default function App() {
           </nav>
 
           <div className="appStatus">
-            <div className={`statusDot ${apiOnline === true ? "online" : apiOnline === false ? "offline" : ""}`} />
-            <span>{apiOnline === true ? "Hệ thống hoạt động" : apiOnline === false ? "Mất kết nối" : ""}</span>
+            <div
+              className={`statusDot ${apiOnline === true ? "online" : apiOnline === false ? "offline" : ""}`}
+              role="img"
+              aria-label={apiOnline === true ? "Hệ thống hoạt động" : apiOnline === false ? "Mất kết nối" : "Đang kiểm tra kết nối"}
+            />
+            <span>{apiOnline === true ? "Hệ thống hoạt động" : apiOnline === false ? "Mất kết nối" : "Đang kiểm tra…"}</span>
           </div>
         </header>
 
