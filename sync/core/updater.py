@@ -19,6 +19,8 @@ from .config import UpdateConfig
 
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_UPDATE_REPO = "sieuxuan/powerbi-data-dtl"
+DEFAULT_ASSET_PATTERN = "PowerBIDataDTL-portable.zip"
 
 
 class UpdateError(RuntimeError):
@@ -58,26 +60,28 @@ class UpdateInfo:
         }
 
 
-def check_for_update(config: UpdateConfig) -> UpdateInfo:
+def check_for_update(config: UpdateConfig, base_dir: Path | None = None) -> UpdateInfo:
     """Check GitHub Releases and return latest matching asset metadata."""
-    if not config.enabled or not config.repo:
+    repo = _repo(config)
+    current_version = _current_version(config, base_dir)
+    if not config.enabled or not repo:
         return UpdateInfo(
             configured=False,
             update_available=False,
-            current_version=config.current_version,
+            current_version=current_version,
             message="Update check is disabled or GitHub repo is empty.",
         )
 
-    release = _fetch_latest_release(config)
+    release = _fetch_latest_release(config, repo)
     latest_version = _normalize_version(str(release.get("tag_name") or release.get("name") or ""))
     if not latest_version:
         raise UpdateError("Latest GitHub release has no tag_name.")
-    asset = _find_asset(release.get("assets", []), config.asset_pattern)
-    update_available = _version_tuple(latest_version) > _version_tuple(config.current_version)
+    asset = _find_asset(release.get("assets", []), _asset_pattern(config))
+    update_available = _version_tuple(latest_version) > _version_tuple(current_version)
     return UpdateInfo(
         configured=True,
         update_available=update_available,
-        current_version=config.current_version,
+        current_version=current_version,
         latest_version=latest_version,
         release_url=release.get("html_url"),
         asset_name=asset.get("name") if asset else None,
@@ -88,7 +92,7 @@ def check_for_update(config: UpdateConfig) -> UpdateInfo:
 
 def download_update(config: UpdateConfig, base_dir: Path) -> UpdateInfo:
     """Download the latest matching GitHub release asset."""
-    info = check_for_update(config)
+    info = check_for_update(config, base_dir)
     if not info.update_available:
         return info
     if not info.asset_url or not info.asset_name:
@@ -128,7 +132,7 @@ def download_update(config: UpdateConfig, base_dir: Path) -> UpdateInfo:
 
 def check_and_download_if_enabled(config: UpdateConfig, base_dir: Path) -> UpdateInfo:
     """Check for updates and optionally download the latest asset."""
-    info = check_for_update(config)
+    info = check_for_update(config, base_dir)
     if info.update_available and config.auto_apply:
         return apply_update(config, base_dir, restart=True)
     if info.update_available and config.auto_download:
@@ -177,14 +181,14 @@ def apply_update(config: UpdateConfig, base_dir: Path, *, restart: bool = False)
     )
 
 
-def _fetch_latest_release(config: UpdateConfig) -> dict[str, Any]:
+def _fetch_latest_release(config: UpdateConfig, repo: str) -> dict[str, Any]:
     """Fetch latest release metadata from GitHub."""
     try:
         import httpx
     except ImportError as exc:
         raise UpdateError("httpx is required. Install dependencies with: pip install -r requirements.txt") from exc
 
-    url = f"https://api.github.com/repos/{config.repo}/releases"
+    url = f"https://api.github.com/repos/{repo}/releases"
     response = httpx.get(url, headers={"Accept": "application/vnd.github+json"}, timeout=30)
     response.raise_for_status()
     releases = response.json()
@@ -209,6 +213,29 @@ def _find_asset(assets: Any, pattern: str) -> dict[str, Any] | None:
         if needle and needle in name.lower():
             return asset
     return assets[0] if assets else None
+
+
+def _repo(config: UpdateConfig) -> str:
+    """Return the GitHub repo used for release updates."""
+    return (config.repo or DEFAULT_UPDATE_REPO).strip()
+
+
+def _asset_pattern(config: UpdateConfig) -> str:
+    """Return the release asset name pattern."""
+    return (config.asset_pattern or DEFAULT_ASSET_PATTERN).strip()
+
+
+def _current_version(config: UpdateConfig, base_dir: Path | None) -> str:
+    """Read the running app version from VERSION, falling back to config."""
+    if base_dir is not None:
+        for path in (base_dir / "VERSION", base_dir.parent / "sync" / "VERSION"):
+            try:
+                version = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if version:
+                return _normalize_version(version)
+    return _normalize_version(config.current_version or "0.0.0")
 
 
 def _normalize_version(value: str) -> str:

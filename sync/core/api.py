@@ -734,7 +734,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None) -> Any:
         config_payload["files"] = []
         runtime_config = load_payload_config(config_payload)
         try:
-            return check_for_update(runtime_config.updates).to_dict()
+            return check_for_update(runtime_config.updates, runtime_config.base_dir).to_dict()
         except UpdateError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

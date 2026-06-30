@@ -685,7 +685,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
       } else if (action === "download") {
         setMessage(result.downloaded_path ? `Đã tải bản cập nhật vào ${result.downloaded_path}.` : "Không có bản mới để tải.");
       } else {
-        setMessage(result.update_available ? `Có bản mới ${result.latest_version}.` : "Đang dùng bản mới nhất theo cấu hình GitHub.");
+        setMessage(result.update_available ? `Có bản mới ${result.latest_version}.` : "Đang dùng bản mới nhất.");
       }
     } catch (updateError) {
       setError(`Kiểm tra cập nhật lỗi: ${updateError.message}`);

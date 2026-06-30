@@ -22,7 +22,7 @@ downloads:
 updates:
   enabled: true
   repo: "sieuxuan/powerbi-data-dtl"
-  current_version: "1.0.0"
+  current_version: "1.0.2"
   asset_pattern: "PowerBIDataDTL-portable.zip"
   check_on_startup: true
   auto_download: true
