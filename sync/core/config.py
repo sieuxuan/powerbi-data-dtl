@@ -33,7 +33,7 @@ class DatabaseConfig:
 class ScheduleConfig:
     default_cron: str = "0 6 * * *"
     timezone: str = "Asia/Ho_Chi_Minh"
-    on_startup: bool = True
+    on_startup: bool = False
 
 
 @dataclass(frozen=True)
@@ -291,7 +291,7 @@ def _parse_schedule(raw: dict[str, Any]) -> ScheduleConfig:
     return ScheduleConfig(
         default_cron=str(raw.get("default_cron", "0 6 * * *")),
         timezone=str(raw.get("timezone", "Asia/Ho_Chi_Minh")),
-        on_startup=_as_bool(raw.get("on_startup", True)),
+        on_startup=_as_bool(raw.get("on_startup", False)),
     )
 
 

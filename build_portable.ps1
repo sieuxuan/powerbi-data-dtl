@@ -119,8 +119,23 @@ $EnvPath = Join-Path $Root "sync\.env"
 if (-not (Test-Path $EnvPath)) {
   Copy-Item (Join-Path $Root "sync\.env.example") $EnvPath
 }
-Start-Process "http://127.0.0.1:8765/"
-& ".\python\python.exe" ".\sync\main.py" --config ".\sync\config.yaml" start
+$AppUrl = "http://127.0.0.1:8765/"
+$ServerJob = Start-Job -ScriptBlock {
+  param($RootPath)
+  Set-Location $RootPath
+  & ".\python\python.exe" ".\sync\main.py" --config ".\sync\config.yaml" start
+} -ArgumentList $Root
+for ($i = 0; $i -lt 30; $i++) {
+  try {
+    Invoke-WebRequest -UseBasicParsing "$AppUrl`api/health" -TimeoutSec 1 | Out-Null
+    Start-Process $AppUrl
+    break
+  } catch {
+    Start-Sleep -Seconds 1
+  }
+}
+Wait-Job $ServerJob | Out-Null
+Receive-Job $ServerJob
 '@
 Set-Content -Path (Join-Path $OutputPath "run-portable.ps1") -Value $RunPs1 -Encoding UTF8
 
@@ -143,7 +158,7 @@ PowerBI Data DTL Portable
 Chay nhanh:
   run-portable.bat
 
-URL:
+Giao dien:
   http://127.0.0.1:8765/
 
 Lan dau tren may moi:

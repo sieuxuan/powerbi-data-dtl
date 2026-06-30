@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Archive,
@@ -37,7 +37,7 @@ const DEFAULT_CONFIG = {
   schedule: {
     default_cron: "0 6 * * *",
     timezone: "Asia/Ho_Chi_Minh",
-    on_startup: true,
+    on_startup: false,
   },
   downloads: {
     dir: "./downloads",
@@ -242,10 +242,10 @@ function sourcePathLabel(file) {
   return file?.source?.path || "Chưa chọn file";
 }
 
-function jobCronLabel(file, defaultCron) {
+function jobCronLabel(file) {
   const crons = normalizeCronList(file?.crons, file?.cron);
   if (crons.length > 1) return `${crons.length} lịch: ${crons.join(" · ")}`;
-  return crons[0] || defaultCron || "Chưa đặt lịch";
+  return crons[0] || "Chưa đặt lịch";
 }
 
 function defaultNewJob(index, schema = "public") {
@@ -368,19 +368,17 @@ function makeDailyCron(timeValue) {
   return `${Number(minute) || 0} ${Number(hour) || 0} * * *`;
 }
 
-function detectCronMode(value, allowDefault) {
-  if (allowDefault && !value) return "default";
+function detectCronMode(value) {
   if (parseDailyCron(value)) return "daily";
   if (String(value || "").trim() === "0 * * * *") return "hourly";
   return "custom";
 }
 
-function CronEditor({ label, value, onChange, allowDefault = false }) {
-  const mode = detectCronMode(value, allowDefault);
+function CronEditor({ label, value, onChange }) {
+  const mode = detectCronMode(value);
   const dailyTime = parseDailyCron(value) || "06:00";
 
   function changeMode(nextMode) {
-    if (nextMode === "default") onChange(null);
     if (nextMode === "daily") onChange(makeDailyCron(dailyTime));
     if (nextMode === "hourly") onChange("0 * * * *");
     if (nextMode === "custom") onChange(value || "0 6 * * *");
@@ -391,7 +389,6 @@ function CronEditor({ label, value, onChange, allowDefault = false }) {
       {label}
       <div className="cronControls">
         <select value={mode} onChange={(event) => changeMode(event.target.value)}>
-          {allowDefault && <option value="default">Theo lịch mặc định</option>}
           <option value="daily">Hằng ngày theo giờ</option>
           <option value="hourly">Mỗi giờ</option>
           <option value="custom">Cron tuỳ chỉnh</option>
@@ -407,7 +404,7 @@ function CronEditor({ label, value, onChange, allowDefault = false }) {
   );
 }
 
-function CronListEditor({ label, value, defaultCron, onChange }) {
+function CronListEditor({ label, value, onChange }) {
   const crons = normalizeCronList(value);
 
   function patchCron(index, nextValue) {
@@ -431,7 +428,7 @@ function CronListEditor({ label, value, defaultCron, onChange }) {
           Thêm lịch
         </button>
       </div>
-      {crons.length === 0 && <small>Dùng lịch mặc định: {defaultCron || "0 6 * * *"}</small>}
+      {crons.length === 0 && <small>Chưa đặt lịch. Job chỉ chạy thủ công.</small>}
       {crons.map((cron, index) => (
         <div className="cronListRow" key={`${cron}-${index}`}>
           <CronEditor label={`Lịch ${index + 1}`} value={cron} onChange={(nextValue) => patchCron(index, nextValue)} />
@@ -442,14 +439,14 @@ function CronListEditor({ label, value, defaultCron, onChange }) {
       ))}
       {crons.length > 0 && (
         <button type="button" className="secondaryButton" onClick={() => onChange([])}>
-          Dùng lịch mặc định
+          Xóa toàn bộ lịch
         </button>
       )}
     </div>
   );
 }
 
-export default function SyncSetup({ notice = "", focusJobName = "", focusToken = 0 }) {
+export default function SyncSetup({ notice = "", focusJobName = "", focusToken = 0, setupTab: controlledSetupTab = "", onSetupTabChange = null }) {
   const [configData, setConfigData] = useState(null);
   const [configPath, setConfigPath] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -462,8 +459,9 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   const [isDownloadingUpdate, setIsDownloadingUpdate] = useState(false);
   const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
-  const [setupTab, setSetupTab] = useState("jobs");
+  const [localSetupTab, setLocalSetupTab] = useState("jobs");
   const [editingJobIndex, setEditingJobIndex] = useState(-1);
+  const [editingJobMode, setEditingJobMode] = useState("details");
   const [uploadingJobIndex, setUploadingJobIndex] = useState(null);
   const [testingFileIndex, setTestingFileIndex] = useState(null);
   const [dryRunningJobIndex, setDryRunningJobIndex] = useState(null);
@@ -479,10 +477,20 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   const [error, setError] = useState("");
   const [pendingBundle, setPendingBundle] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
+  const handledFocusTokenRef = useRef(null);
   const enabledJobs = useMemo(
     () => (configData?.files || []).filter((file) => file.enabled).length,
     [configData],
   );
+  const setupTab = controlledSetupTab || localSetupTab;
+
+  function setSetupTab(tab) {
+    if (onSetupTabChange) {
+      onSetupTabChange(tab);
+    } else {
+      setLocalSetupTab(tab);
+    }
+  }
 
   useEffect(() => {
     loadConfig();
@@ -494,10 +502,13 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
 
   useEffect(() => {
     if (!configData?.files?.length || !focusJobName) return;
+    if (handledFocusTokenRef.current === focusToken) return;
     const index = configData.files.findIndex((file) => file.name === focusJobName);
     if (index >= 0) {
+      handledFocusTokenRef.current = focusToken;
       setSetupTab("jobs");
       setEditingJobIndex(index);
+      setEditingJobMode("details");
       setMessage(`Đang sửa job ${focusJobName}.`);
     }
   }, [configData, focusJobName, focusToken]);
@@ -831,6 +842,8 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   }
 
   function removeJob(index) {
+    const name = configData?.files?.[index]?.name || `Job ${index + 1}`;
+    if (!window.confirm(`Xóa tác vụ "${name}"?`)) return;
     setIsDirty(true);
     setEditingJobIndex((current) => {
       if (current !== index) return current > index ? current - 1 : current;
@@ -860,9 +873,28 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
       const copied = normalizeFile({ ...clone(sourceJob), name, enabled: false }, files.length, current?.database?.schema);
       files.splice(index + 1, 0, copied);
       setEditingJobIndex(index + 1);
+      setEditingJobMode("details");
       setMessage(`Đã copy job "${sourceJob.name}". Bản copy đang tắt để tránh chạy trùng.`);
       return { ...current, files };
     });
+  }
+
+  function openJobEditor(index, mode = "details") {
+    setEditingJobMode(mode);
+    setEditingJobIndex(index);
+  }
+
+  async function toggleJobEnabled(index) {
+    if (!configData?.files?.[index]) return;
+    const files = [...(configData.files || [])];
+    const nextEnabled = !files[index].enabled;
+    files[index] = { ...files[index], enabled: nextEnabled };
+    const nextConfig = { ...configData, files };
+    try {
+      await persistConfig(nextConfig, nextEnabled ? "Đã bật và lưu tác vụ." : "Đã tắt và lưu tác vụ.");
+    } catch {
+      // persistConfig has already shown the error.
+    }
   }
 
   function patchJob(index, updater) {
@@ -1046,9 +1078,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   return (
     <>
       <header className="topbar">
-        <div className="topbarMeta">
-          <h2>Cài đặt đồng bộ</h2>
-        </div>
         <div className="actions">
           <button type="button" onClick={loadConfig} disabled={isLoading}>
             <RefreshCcw size={17} aria-hidden="true" />
@@ -1056,7 +1085,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
           </button>
           <button type="button" className="primary" onClick={saveConfig} disabled={!configData || isSaving}>
             <Save size={17} aria-hidden="true" />
-            {isSaving ? "Đang lưu" : "Lưu cấu hình"}
+            {isSaving ? "Đang lưu" : "Lưu"}
           </button>
         </div>
       </header>
@@ -1078,27 +1107,22 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
       {isDirty && !error && (
         <div className="syncBanner warning">
           <AlertCircle size={18} aria-hidden="true" />
-          <span>Có thay đổi chưa được lưu. Bấm "Lưu cấu hình" trước khi chạy đồng bộ hoặc chuyển máy.</span>
+          <span>Có thay đổi chưa được lưu. Bấm "Lưu" trước khi chạy đồng bộ hoặc chuyển máy.</span>
+        </div>
+      )}
+
+      {configData && isDirty && (
+        <div className="localSaveBar">
+          <span>Đang có thay đổi chưa lưu.</span>
+          <button type="button" className="primary" onClick={saveConfig} disabled={isSaving}>
+            <Save size={16} aria-hidden="true" />
+            {isSaving ? "Đang lưu" : "Lưu"}
+          </button>
         </div>
       )}
 
       {configData && (
         <div className="setupLayout">
-          <nav className="setupTabs" aria-label="Nhóm cấu hình sync">
-            <button type="button" className={setupTab === "jobs" ? "active" : ""} onClick={() => setSetupTab("jobs")}>
-              <Link2 size={16} aria-hidden="true" />
-              Tác vụ
-            </button>
-            <button type="button" className={setupTab === "system" ? "active" : ""} onClick={() => setSetupTab("system")}>
-              <Settings2 size={16} aria-hidden="true" />
-              Hệ thống
-            </button>
-            <button type="button" className={setupTab === "notify" ? "active" : ""} onClick={() => setSetupTab("notify")}>
-              <Bell size={16} aria-hidden="true" />
-              Thông báo
-            </button>
-          </nav>
-
           {setupTab === "jobs" && wizardOpen && wizardJob && (
             <section className="setupSection wizardPanel">
               <div className="wizardHeader">
@@ -1306,7 +1330,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     <CronListEditor
                       label="Lịch riêng"
                       value={wizardJob.crons}
-                      defaultCron={configData.schedule.default_cron}
                       onChange={(value) => patchWizardJob({ crons: value, cron: value[0] || null })}
                     />
                   </div>
@@ -1398,7 +1421,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
               </button>
               <button type="button" className="secondaryButton" onClick={saveConfig} disabled={!configData || isSaving}>
                 <Save size={16} aria-hidden="true" />
-                Lưu PostgreSQL
+                Lưu
               </button>
             </div>
             <div className="setupGrid">
@@ -1433,28 +1456,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
 
           {setupTab === "jobs" && (
           <>
-          <section className="setupSection">
-            <div className="sectionTitle">
-              <Clock3 size={18} aria-hidden="true" />
-              <h3>Lịch chạy</h3>
-            </div>
-            <div className="setupGrid compact">
-              <CronEditor
-                label="Lịch mặc định"
-                value={configData.schedule.default_cron}
-                onChange={(value) => patchSection("schedule", { default_cron: value || "0 6 * * *" })}
-              />
-              <label>
-                Timezone
-                <input value={configData.schedule.timezone || ""} onChange={(event) => patchSection("schedule", { timezone: event.target.value })} />
-              </label>
-              <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.schedule.on_startup)} onChange={(event) => patchSection("schedule", { on_startup: event.target.checked })} />
-                Chạy khi khởi động scheduler
-              </label>
-            </div>
-          </section>
-
           <section className="setupSection setupJobs">
             <div className="sectionTitle withAction">
               <div>
@@ -1472,42 +1473,76 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
             {configData.files.map((file, index) => {
               const sourceMode = file.source?.type === "onedrive" ? "sharepoint" : "local";
               const isEditing = editingJobIndex === index;
+              const scheduleOnly = isEditing && editingJobMode === "schedule";
               return (
                 <article className={`jobEditor ${isEditing ? "editing" : "compact"}`} key={`job-${index}`}>
                   <div className="jobCompactHeader">
+                    {isEditing && (
+                      <button type="button" className="modalCloseButton" aria-label="Đóng" onClick={() => setEditingJobIndex(-1)}>
+                        ×
+                      </button>
+                    )}
                     <div className="jobSummary">
-                      <strong>{file.name || `Job ${index + 1}`}</strong>
-                      <span>{sourceLabel(file)} · {file.target?.schema || configData.database.schema}.{file.target?.table || "new_table"}</span>
-                      <small>{sourcePathLabel(file)}</small>
+                      {isEditing ? (
+                        <input
+                          className="jobTitleInput"
+                          value={file.name || ""}
+                          placeholder={`Job ${index + 1}`}
+                          onChange={(event) => patchJob(index, { name: event.target.value })}
+                        />
+                      ) : (
+                        <strong>{file.name || `Job ${index + 1}`}</strong>
+                      )}
+                      {!isEditing && (
+                        <>
+                          <span>{sourceLabel(file)} · {file.target?.schema || configData.database.schema}.{file.target?.table || "new_table"}</span>
+                          <small>{sourcePathLabel(file)}</small>
+                        </>
+                      )}
                     </div>
                     <div className="jobMeta">
-                      <span className={`statusPill ${file.enabled ? "success" : "idle"}`}>{file.enabled ? "Đang bật" : "Tắt"}</span>
-                      <span>{jobCronLabel(file, configData.schedule.default_cron)}</span>
+                      <button
+                        type="button"
+                        className={`jobToggleButton ${file.enabled ? "enabled" : "disabled"}`}
+                        onClick={() => toggleJobEnabled(index)}
+                        title={file.enabled ? "Bấm để tắt job" : "Bấm để bật job"}
+                      >
+                        <span />
+                        {file.enabled ? "Đang bật" : "Đang tắt"}
+                      </button>
+                      <span className="jobScheduleText">{jobCronLabel(file)}</span>
                     </div>
                     <div className="rowActions">
-                      <button type="button" onClick={() => setEditingJobIndex(isEditing ? -1 : index)}>
-                        <Pencil size={15} aria-hidden="true" />
-                        {isEditing ? "Đóng" : "Sửa"}
-                      </button>
-                      <button type="button" onClick={() => testJobFile(index)} disabled={testingFileIndex === index}>
-                        <Play size={15} aria-hidden="true" />
-                        Test
-                      </button>
-                      <button type="button" onClick={() => dryRunJob(index)} disabled={dryRunningJobIndex === index}>
-                        <Eye size={15} aria-hidden="true" />
-                        Dry run
-                      </button>
-                      <button type="button" onClick={() => copyJob(index)}>
-                        <Copy size={15} aria-hidden="true" />
-                        Copy
-                      </button>
-                      <button type="button" onClick={() => patchJob(index, { enabled: !file.enabled })}>
-                        {file.enabled ? "Tắt" : "Bật"}
-                      </button>
+                      {!isEditing && (
+                        <>
+                          <button type="button" onClick={() => openJobEditor(index, "details")}>
+                            <Pencil size={15} aria-hidden="true" />
+                            Sửa
+                          </button>
+                          <button type="button" onClick={() => openJobEditor(index, "schedule")}>
+                            <Clock3 size={15} aria-hidden="true" />
+                            Lịch
+                          </button>
+                        </>
+                      )}
+                      {isEditing && (
+                        <button type="button" className="primary" onClick={saveConfig} disabled={isSaving}>
+                          <Save size={15} aria-hidden="true" />
+                          {isSaving ? "Đang lưu" : "Lưu"}
+                        </button>
+                      )}
+                      {!isEditing && (
+                        <button type="button" onClick={() => copyJob(index)}>
+                          <Copy size={15} aria-hidden="true" />
+                          Copy
+                        </button>
+                      )}
                     </div>
-                    <button type="button" className="iconButton danger" title="Xóa job" onClick={() => removeJob(index)}>
-                      <Trash2 size={16} aria-hidden="true" />
-                    </button>
+                    {!isEditing && (
+                      <button type="button" className="iconButton danger jobDeleteButton" title="Xóa job" onClick={() => removeJob(index)}>
+                        <Trash2 size={16} aria-hidden="true" />
+                      </button>
+                    )}
                   </div>
 
                   {jobFeedback[index] && (
@@ -1539,17 +1574,8 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
 
                   {isEditing && (
                     <>
-                  <div className="jobNameRow">
-                    <label>
-                      Tên job
-                      <input value={file.name || ""} onChange={(event) => patchJob(index, { name: event.target.value })} />
-                    </label>
-                    <label className="checkField">
-                      <input type="checkbox" checked={Boolean(file.enabled)} onChange={(event) => patchJob(index, { enabled: event.target.checked })} />
-                      Bật job
-                    </label>
-                  </div>
-
+                  {!scheduleOnly && (
+                    <>
                   <div className="jobSourcePanel">
                     <div className="sourceModeButtons" role="group" aria-label="Chọn nguồn file">
                       <button type="button" className={sourceMode === "local" ? "active" : ""} onClick={() => changeSourceType(index, "local")}>
@@ -1647,8 +1673,21 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     </div>
                   </div>
 
+                    </>
+                  )}
+
+                  <div className="jobConfigGroup scheduleGroup">
+                    <h4>Lịch chạy</h4>
+                    <CronListEditor
+                      label="Lịch riêng của job"
+                      value={file.crons}
+                      onChange={(value) => patchJob(index, { crons: value, cron: value[0] || null })}
+                    />
+                  </div>
+
+                  {!scheduleOnly && (
                   <details className="advancedPanel" open>
-                    <summary>Đọc file & lịch chạy</summary>
+                    <summary>Đọc file</summary>
                     <div className="setupGrid">
                       <label>
                         Sheet
@@ -1676,30 +1715,22 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                         <input value={formatList(file.options?.skip_columns)} placeholder="buyer.1, note" onChange={(event) => patchJobNested(index, "options", { skip_columns: parseCsvList(event.target.value) })} />
                       </label>
                       <label>
-                        Encoding CSV
-                        <input value={file.options?.encoding || ""} onChange={(event) => patchJobNested(index, "options", { encoding: event.target.value })} />
-                      </label>
-                      <label>
                         Delimiter CSV
                         <input value={file.options?.delimiter || ""} onChange={(event) => patchJobNested(index, "options", { delimiter: event.target.value })} />
                       </label>
-                      <label className="wideField">
+                      <label className="wideField compactRenameField">
                         Đổi tên cột
                         <textarea
-                          rows="4"
+                          rows="2"
+                          className="compactTextarea"
                           value={formatColumnRenames(file.options?.column_renames)}
                           placeholder={"Mã KH => ma_kh\nDoanh thu => doanh_thu"}
                           onChange={(event) => patchJobNested(index, "options", { column_renames: parseColumnRenamesText(event.target.value) })}
                         />
                       </label>
-                      <CronListEditor
-                        label="Lịch riêng của job"
-                        value={file.crons}
-                        defaultCron={configData.schedule.default_cron}
-                        onChange={(value) => patchJob(index, { crons: value, cron: value[0] || null })}
-                      />
                     </div>
                   </details>
+                  )}
                     </>
                   )}
                 </article>

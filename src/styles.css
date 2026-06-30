@@ -115,11 +115,15 @@ h1, h2, h3, h4 { font-family: var(--ui); }
 .actions > button:hover { background: #F3F4F6; border-color: var(--line-strong); }
 
 .btn.primary,
-.actions > button.primary {
+.actions > button.primary,
+.rowActions > button.primary,
+.localSaveBar > button.primary {
   background: var(--ink); border-color: var(--ink); color: #fff;
 }
 .btn.primary:hover,
-.actions > button.primary:hover { background: var(--ink-2); border-color: var(--ink-2); }
+.actions > button.primary:hover,
+.rowActions > button.primary:hover,
+.localSaveBar > button.primary:hover { background: var(--ink-2); border-color: var(--ink-2); }
 
 .btn.danger { color: var(--err); border-color: #FECACA; }
 .btn.danger:hover { background: var(--err-bg); }
@@ -246,18 +250,26 @@ input:focus, select:focus, textarea:focus {
 /* =====================================================================
    TABS (underline)
    ===================================================================== */
-.tabs, .setupTabs {
+.tabs, .setupTabs, .setupTopMenu {
   display: flex; gap: 0; border-bottom: 1px solid var(--line); overflow-x: auto;
 }
-.tabs button, .setupTabs button {
+.setupTopMenu {
+  margin-left: auto; padding: 3px; gap: 4px; border: 0; border-radius: var(--r-md);
+  background: var(--paper); min-height: 36px;
+}
+.tabs button, .setupTabs button, .setupTopMenu button {
   border: 0; background: transparent; color: var(--ink-soft);
   font-size: 14px; font-weight: 600; padding: 10px 16px;
   border-bottom: 2px solid transparent; margin-bottom: -1px;
   display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
   transition: color .15s;
 }
-.tabs button:hover, .setupTabs button:hover { color: var(--ink); }
+.setupTopMenu button {
+  min-height: 30px; padding: 0 12px; border-bottom: 0; margin-bottom: 0; border-radius: var(--r-sm);
+}
+.tabs button:hover, .setupTabs button:hover, .setupTopMenu button:hover { color: var(--ink); }
 .tabs button.active, .setupTabs button.active { color: var(--ink); border-bottom-color: var(--ink); }
+.setupTopMenu button.active { color: #fff; background: var(--ink); }
 
 /* =====================================================================
    TABLES
@@ -460,12 +472,43 @@ td input, td select { min-height: 34px; }
 }
 .jobEditor.compact { padding: 12px 14px; }
 .jobEditor.editing {
-  border-color: var(--line-strong); border-left: 4px solid var(--ink);
-  background: var(--surface); box-shadow: var(--shadow-sm);
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(1120px, calc(100vw - 32px)); max-height: calc(100vh - 32px);
+  overflow: auto; z-index: 1100;
+  border-color: transparent; border-left: 0; border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md), 0 0 0 9999px rgba(17, 24, 39, 0.42);
 }
-.jobEditor.editing .jobCompactHeader { grid-template-columns: minmax(260px, 1.5fr) minmax(180px, 0.8fr) auto 36px; align-items: start; }
+.modalCloseButton {
+  position: absolute; top: 18px; right: 18px; z-index: 4;
+  width: 36px; height: 36px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--surface); color: var(--ink);
+  display: inline-grid; place-items: center; font-size: 22px; line-height: 1;
+  box-shadow: var(--shadow-sm);
+}
+.modalCloseButton:hover { background: #F3F4F6; border-color: var(--line-strong); }
+.jobEditor.editing .jobCompactHeader {
+  position: sticky; top: -20px; z-index: 2;
+  margin: -8px -8px 8px; padding: 14px 58px 14px 16px;
+  background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  grid-template-columns: minmax(280px, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+}
+.jobEditor.editing .jobSummary { gap: 0; align-self: center; min-width: 220px; }
+.jobEditor.editing .jobSummary strong { font-size: 18px; }
 .jobEditor.editing .jobSummary span, .jobEditor.editing .jobSummary small { white-space: normal; }
-.jobEditor.editing .jobMeta, .jobEditor.editing .rowActions { justify-content: flex-start; }
+.jobEditor.editing .jobMeta { justify-content: flex-end; gap: 8px; }
+.jobEditor.editing .rowActions { justify-content: flex-end; }
+.jobEditor.editing .rowActions .primary { min-height: 34px; padding: 0 12px; }
+.jobTitleInput {
+  min-height: 38px; padding: 0 2px; border: 0; background: transparent;
+  color: var(--ink); font-size: 18px; font-weight: 700;
+}
+.jobTitleInput:focus {
+  outline: none; box-shadow: inset 0 -2px 0 var(--ink);
+}
 
 .sectionTitle { min-height: 28px; display: flex; align-items: center; gap: 8px; color: var(--ink); }
 .sectionTitle h3 { margin: 0; font-size: 15px; font-weight: 600; }
@@ -480,25 +523,53 @@ td input, td select { min-height: 34px; }
 .jobSummary small { color: var(--ink-faint); font-size: 12px; }
 
 .jobMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; color: var(--ink-soft); font-size: 12px; font-weight: 600; }
+.jobToggleButton {
+  min-height: 28px; padding: 0 10px 0 6px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--surface); color: var(--ink-soft);
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12px; font-weight: 700;
+}
+.jobToggleButton span {
+  width: 18px; height: 18px; border-radius: 999px;
+  background: var(--idle-dot); box-shadow: inset 0 0 0 5px rgba(255,255,255,0.75);
+}
+.jobToggleButton.enabled { border-color: #BBF7D0; background: var(--ok-bg); color: var(--ok); }
+.jobToggleButton.enabled span { background: var(--ok-dot); }
+.jobToggleButton.disabled { border-color: var(--line); background: var(--idle-bg); color: var(--idle); }
+.jobToggleButton:hover { filter: brightness(0.98); }
+.jobScheduleText {
+  min-height: 28px; padding: 0 10px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--paper); color: var(--ink-soft);
+  display: inline-flex; align-items: center;
+}
 .jobNameRow { display: grid; grid-template-columns: minmax(260px, 1fr) 140px; gap: 12px; align-items: end; }
 .jobNameRow label { display: grid; gap: 6px; }
 .jobHeader { display: grid; grid-template-columns: minmax(240px, 1fr) 140px 36px; gap: 10px; align-items: end; }
 
 .jobSourcePanel, .jobConfigGroup, .advancedPanel {
-  border: 1px solid var(--line); border-radius: var(--r-md);
-  background: var(--surface); padding: 14px; display: grid; gap: 12px;
+  border: 0; border-radius: var(--r-md);
+  background: var(--paper); padding: 14px; display: grid; gap: 12px;
 }
+.jobEditor.editing .jobSourcePanel,
+.jobEditor.editing .jobConfigGroup,
+.jobEditor.editing .advancedPanel {
+  background: #F8FAFC; padding: 16px; border-radius: 12px;
+}
+.jobEditor.editing .scheduleGroup { background: #F1F5F9; }
+.scheduleGroup .cronListEditor { grid-column: auto; border: 0; background: transparent; padding: 0; }
+.compactRenameField { max-width: 520px; }
+.compactTextarea { min-height: 64px; resize: vertical; }
 .jobConfigGroup h4 { margin: 0; font-size: 11px; font-weight: 700; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.05em; }
 .advancedPanel summary {
   cursor: pointer; list-style: none;
   display: flex; align-items: center; gap: 8px;
-  min-height: 42px; padding: 0 14px;
-  border: 1px solid var(--line); border-radius: var(--r-sm);
-  background: var(--paper); color: var(--ink);
+  min-height: 38px; padding: 0;
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--ink);
   font-size: 13px; font-weight: 600;
   transition: background .12s, border-color .12s;
 }
-.advancedPanel summary:hover { background: #F3F4F6; border-color: var(--line-strong); }
+.advancedPanel summary:hover { background: transparent; color: var(--ink-2); }
 .advancedPanel summary::-webkit-details-marker { display: none; }
 .advancedPanel summary::before { content: "›"; color: var(--ink-faint); font-size: 17px; line-height: 1; width: 12px; }
 .advancedPanel[open] summary::before { content: "⌄"; }
@@ -511,7 +582,7 @@ td input, td select { min-height: 34px; }
 }
 .sourceModeButtons button:hover { background: #F3F4F6; }
 .sourceModeButtons button.active { background: var(--ink); border-color: var(--ink); color: #fff; }
-.sourceModeButtons.focusMode { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper); padding: 12px; }
+.sourceModeButtons.focusMode { border: 0; border-radius: var(--r-md); background: var(--paper); padding: 12px; }
 
 .sourceInputRow { display: grid; grid-template-columns: 180px minmax(0, 1fr) 118px 118px; gap: 10px; align-items: end; }
 .sourceInputRow.linkMode { grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.9fr) 118px 118px; }
@@ -572,14 +643,14 @@ td input, td select { min-height: 34px; }
 .wizardActions .primary:hover { background: var(--ink-2); }
 
 /* Preview / mapping */
-.previewPanel { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper); padding: 12px; display: grid; gap: 10px; }
+.previewPanel { border: 0; border-radius: var(--r-md); background: var(--paper); padding: 12px; display: grid; gap: 10px; }
 .previewTableWrap { overflow: auto; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
 .previewTableWrap table { min-width: 680px; }
 .previewTableWrap td { font-size: 12px; }
 .previewTableWrap td:first-child { width: 42px; color: var(--ink-faint); font-weight: 700; }
 .previewHeaderRow td { background: var(--idle-bg); color: var(--ink); font-weight: 700; }
 
-.columnMappingPanel { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper); padding: 12px; display: grid; gap: 10px; }
+.columnMappingPanel { border: 0; border-radius: var(--r-md); background: var(--paper); padding: 12px; display: grid; gap: 10px; }
 .columnMappingGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .columnMappingRow { display: grid; grid-template-columns: 86px minmax(120px, 0.8fr) minmax(160px, 1fr); gap: 8px; align-items: center; }
 .columnMappingRow.skipped { opacity: 0.6; }
@@ -620,6 +691,16 @@ td input, td select { min-height: 34px; }
 .emptyText { color: var(--ink-soft); font-size: 13px; text-align: center; padding: 24px; }
 .folderActions, .backupActions { display: flex; flex-wrap: wrap; gap: 8px; }
 
+.localSaveBar {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  z-index: 900; width: min(560px, calc(100vw - 32px));
+  border: 1px solid var(--line-strong); border-radius: var(--r-md);
+  background: var(--surface); box-shadow: var(--shadow-md);
+  padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  color: var(--ink-soft); font-size: 13px; font-weight: 600;
+}
+.localSaveBar button { flex-shrink: 0; }
+
 /* =====================================================================
    TOAST
    ===================================================================== */
@@ -659,6 +740,12 @@ td input, td select { min-height: 34px; }
   .setupGrid .wideField { grid-column: span 2; }
   .jobHeader { grid-template-columns: minmax(0, 1fr) 140px 36px; }
   .jobCompactHeader { grid-template-columns: minmax(0, 1fr); }
+  .jobEditor.editing .jobCompactHeader {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    padding-right: 58px;
+  }
+  .jobEditor.editing .jobMeta, .jobEditor.editing .rowActions { justify-content: flex-start; }
   .jobMeta, .jobCompactHeader .rowActions { justify-content: flex-start; }
   .sourceInputRow, .sourceInputRow.linkMode, .columnMappingGrid, .columnMappingRow, .typePreviewGrid { grid-template-columns: 1fr; }
   .sqlHeader { align-items: flex-start; flex-direction: column; }

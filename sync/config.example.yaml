@@ -11,7 +11,7 @@ database:
 schedule:
   default_cron: "0 6 * * *"
   timezone: "Asia/Ho_Chi_Minh"
-  on_startup: true
+  on_startup: false
 
 # === DOWNLOAD TAM ===
 downloads:

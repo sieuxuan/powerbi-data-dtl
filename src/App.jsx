@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bell,
   Check,
   ChevronDown,
   Clipboard,
@@ -907,7 +908,8 @@ export default function App() {
   const [importLink, setImportLink] = useState("");
   const [isReadingLink, setIsReadingLink] = useState(false);
   const [activeTab, setActiveTab] = useState("schema");
-  const [activeMode, setActiveMode] = useState("builder");
+  const [activeMode, setActiveMode] = useState("setup");
+  const [setupTab, setSetupTab] = useState("jobs");
   const [setupNotice, setSetupNotice] = useState("");
   const [setupFocusJob, setSetupFocusJob] = useState(null);
   const [copied, setCopied] = useState(false);
@@ -1187,6 +1189,7 @@ export default function App() {
 
   function editSyncJob(name) {
     setSetupFocusJob({ name, token: Date.now() });
+    setSetupTab("jobs");
     setActiveMode("setup");
   }
 
@@ -1207,13 +1210,17 @@ export default function App() {
           </div>
 
           <nav className="appNav" aria-label="Điều hướng chính">
-            <button type="button" className={activeMode === "builder" ? "active" : ""} onClick={() => setActiveMode("builder")}>
-              <FileSpreadsheet size={16} aria-hidden="true" />
-              Nhập dữ liệu
+            <button type="button" className={activeMode !== "sync" && setupTab === "jobs" ? "active" : ""} onClick={() => { setActiveMode("setup"); setSetupTab("jobs"); }}>
+              <Link2 size={16} aria-hidden="true" />
+              Tác vụ
             </button>
-            <button type="button" className={activeMode === "setup" ? "active" : ""} onClick={() => setActiveMode("setup")}>
+            <button type="button" className={activeMode !== "sync" && setupTab === "system" ? "active" : ""} onClick={() => { setActiveMode("setup"); setSetupTab("system"); }}>
               <Settings2 size={16} aria-hidden="true" />
-              Cài đặt
+              Hệ thống
+            </button>
+            <button type="button" className={activeMode !== "sync" && setupTab === "notify" ? "active" : ""} onClick={() => { setActiveMode("setup"); setSetupTab("notify"); }}>
+              <Bell size={16} aria-hidden="true" />
+              Thông báo
             </button>
             <button type="button" className={activeMode === "sync" ? "active" : ""} onClick={() => setActiveMode("sync")}>
               <Server size={16} aria-hidden="true" />
@@ -1232,8 +1239,14 @@ export default function App() {
         </header>
 
         <section className="workspace">
-          {activeMode === "setup" ? (
-            <SyncSetup notice={setupNotice} focusJobName={setupFocusJob?.name} focusToken={setupFocusJob?.token} />
+          {activeMode !== "sync" ? (
+            <SyncSetup
+              notice={setupNotice}
+              focusJobName={setupFocusJob?.name}
+              focusToken={setupFocusJob?.token}
+              setupTab={setupTab}
+              onSetupTabChange={setSetupTab}
+            />
           ) : activeMode === "sync" ? (
             <SyncMonitor onEditJob={editSyncJob} />
           ) : !project ? (

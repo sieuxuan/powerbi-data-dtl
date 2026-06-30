@@ -131,8 +131,8 @@ class SyncEngine:
                     "source_type": file_config.source.type,
                     "table": table_name,
                     "sync_mode": file_config.sync_mode,
-                    "cron": file_config.cron or self.config.schedule.default_cron,
-                    "crons": file_config.crons or ([file_config.cron] if file_config.cron else []) or [self.config.schedule.default_cron],
+                    "cron": file_config.cron,
+                    "crons": file_config.crons or ([file_config.cron] if file_config.cron else []),
                     "skip_unchanged": file_config.skip_unchanged,
                     "last_run": _json_safe_log(latest) if latest else None,
                 }

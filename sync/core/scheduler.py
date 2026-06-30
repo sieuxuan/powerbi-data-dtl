@@ -78,9 +78,7 @@ class SyncRuntime:
         )
         self._schedule_jobs()
         self.scheduler.start()
-        if self.config.schedule.on_startup:
-            LOGGER.info("schedule.on_startup=true; running all jobs once.")
-            self.executor.submit(lambda: SyncEngine(self.config).run_all())
+        LOGGER.info("Scheduler started; jobs run only by cron schedule or manual trigger.")
 
     def _schedule_jobs(self) -> None:
         """Register enabled file jobs on the current scheduler."""
@@ -93,7 +91,10 @@ class SyncRuntime:
             return
         self.scheduler.remove_all_jobs()
         for file_config in enabled_files(self.config):
-            crons = file_config.crons or ([file_config.cron] if file_config.cron else []) or [self.config.schedule.default_cron]
+            crons = file_config.crons or ([file_config.cron] if file_config.cron else [])
+            if not crons:
+                LOGGER.info("Job %s has no cron schedule; it can still run manually.", file_config.name)
+                continue
             for index, cron in enumerate(crons, start=1):
                 trigger = CronTrigger.from_crontab(cron, timezone=self.config.schedule.timezone)
                 self.scheduler.add_job(
