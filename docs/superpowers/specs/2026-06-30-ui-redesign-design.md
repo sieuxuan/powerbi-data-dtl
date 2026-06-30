@@ -5,6 +5,29 @@
 
 ---
 
+## 0. Design revision — frontend-design pass ("Màu sắc = trạng thái")
+
+> Bổ sung sau khi review qua lens frontend-design. Thay thế hệ màu teal ở mục 3-4.
+
+**Luận điểm:** Đây là công cụ giám sát đồng bộ dữ liệu, nên **màu sắc phải mang ý nghĩa**. Toàn bộ chrome (header, nav, button, card, table) dùng tông mực-trên-giấy (ink-on-paper) phi sắc. **Chỉ trạng thái sync mới có màu** — xanh lá / xanh dương / hổ phách / đỏ — mỗi màu nói lên tình trạng dữ liệu.
+
+Việc này cũng sửa một lỗi thực tế của bảng màu cũ: teal `#0D9488` nằm sát success-green → trong Monitor, "brand" và "thành công" bị lẫn. Chrome phi sắc loại bỏ xung đột này.
+
+**Quy tắc typography:** chữ của con người dùng Inter, giá trị của máy dùng mono. Tên bảng, số dòng, thời gian, cron, hash, đường dẫn → Cascadia Code / Consolas + tabular figures. Cả hai font đều có sẵn trên Windows → chạy offline được (bản portable không có CDN).
+
+**Tokens (ghi đè mục 3):**
+
+| Lớp | Token |
+|-----|-------|
+| Chrome (phi sắc) | `--paper #FCFCFD` · `--surface #FFFFFF` · `--ink #0B1220` · `--ink-soft #475569` · `--ink-faint #94A3B8` · `--line #E7E9EF` · `--line-strong #D4D8E0` |
+| Status (màu duy nhất) | success `#047857`/`#10B981` · running `#1D4ED8`/`#3B82F6` (pulse) · warn `#B45309`/`#F59E0B` · error `#B91C1C`/`#EF4444` · idle `#64748B`/`#CBD5E1` |
+
+**Điểm nhấn (signature):** *status spine* — mỗi hàng job và metric card có thanh dọc 2px tô màu theo trạng thái ở mép trái; job đang chạy thì pulse. Primary button = nền ink đặc (không dùng màu brand). Tab/nav active = gạch chân ink.
+
+**Typography (ghi đè mục 4):** Inter cho UI/chữ; Cascadia Code/Consolas cho mọi giá trị dữ liệu (mono, tabular-nums). Micro-label uppercase tracked 11px. Số liệu metric: mono cỡ lớn — đây là "type hero".
+
+---
+
 ## 1. Tổng quan định hướng
 
 **Phong cách:** Clean Professional — sáng, card-based, premium B2B (tham khảo Retool, Linear)  
