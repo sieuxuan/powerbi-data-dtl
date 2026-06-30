@@ -9,7 +9,6 @@ import {
   FolderOpen,
   History,
   Link2,
-  RefreshCcw,
   Save,
   Server,
   Settings2,
@@ -507,13 +506,6 @@ function buildProject(fileName, parsed, dialect = "PostgreSQL") {
   return withSqlParts(project);
 }
 
-function formatDateTime(value) {
-  return new Intl.DateTimeFormat("vi-VN", {
-    dateStyle: "short",
-    timeStyle: "short",
-  }).format(new Date(value));
-}
-
 function escapeCsvValue(value) {
   if (value === null || value === undefined) return "";
   const text = value instanceof Date ? value.toISOString() : String(value);
@@ -608,6 +600,288 @@ function applyMappingPreset(project) {
   return withSqlParts({ ...project, columns, mappingPresetApplied: true });
 }
 
+function HistoryDropdown({ projects, onLoad, onRemove, onRefresh }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    function handleClick(event) {
+      if (wrapRef.current && !wrapRef.current.contains(event.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const recent = projects.slice(0, 6);
+
+  return (
+    <div className="dropdownWrap" ref={wrapRef}>
+      <button type="button" className="btn" onClick={() => { setOpen((value) => !value); onRefresh(); }}>
+        <History size={15} aria-hidden="true" />
+        Mở lại
+        <ChevronDown size={13} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="dropdown" style={{ minWidth: 260 }}>
+          {recent.length === 0 && (
+            <div style={{ padding: "12px", color: "var(--ink-soft)", fontSize: 13 }}>
+              Chưa có file nào được lưu.
+            </div>
+          )}
+          {recent.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => { onLoad(item.id); setOpen(false); }}
+              style={{ flexDirection: "column", alignItems: "flex-start", gap: 2 }}
+            >
+              <span style={{ fontWeight: 600, fontSize: 13 }}>{item.name}</span>
+              <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{item.fileName}</span>
+            </button>
+          ))}
+          {recent.length > 0 && (
+            <>
+              <hr />
+              <button
+                type="button"
+                onClick={() => { recent.forEach((item) => onRemove(item.id)); setOpen(false); }}
+                style={{ color: "var(--err)", fontSize: 12 }}
+              >
+                <Trash2 size={13} aria-hidden="true" />
+                Xóa tất cả lịch sử
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectWorkspace({
+  project, projects, activeTab, previewRows, includedColumns, copied,
+  onTabChange, onPatchProject, onPatchColumn, onSave, onCopyFull, onCopyText,
+  onDownloadFull, onDownloadCreate, onDownloadInsert, onAddToSync, onLoadProject,
+  onRemoveProject, onRefreshProjects, onClearProject, onChangeDialect, onChangeHeaderRow,
+}) {
+  const [sqlDropOpen, setSqlDropOpen] = useState(false);
+  const sqlDropRef = useRef(null);
+
+  useEffect(() => {
+    function handleClick(event) {
+      if (sqlDropRef.current && !sqlDropRef.current.contains(event.target)) setSqlDropOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  return (
+    <>
+      <header className="topbar">
+        <div className="topbarMeta">
+          <p className="eyebrow">{project.fileName}{project.sheetName ? ` / ${project.sheetName}` : ""}</p>
+          <h2>{project.name}</h2>
+          <p className="metaLine">
+            {project.rows.length.toLocaleString("vi-VN")} dòng · {project.columns.length} cột · {includedColumns.length} cột được xuất
+          </p>
+        </div>
+        <div className="actions">
+          <button type="button" onClick={onClearProject}>
+            <FolderOpen size={15} aria-hidden="true" />
+            Mở file mới
+          </button>
+          <HistoryDropdown
+            projects={projects}
+            onLoad={onLoadProject}
+            onRemove={onRemoveProject}
+            onRefresh={onRefreshProjects}
+          />
+          <button type="button" onClick={onSave}>
+            <Save size={15} aria-hidden="true" />
+            Lưu
+          </button>
+          <button type="button" onClick={onCopyFull}>
+            {copied ? <Check size={15} aria-hidden="true" /> : <Clipboard size={15} aria-hidden="true" />}
+            {copied ? "Đã sao chép" : "Sao chép SQL"}
+          </button>
+          <button type="button" onClick={onAddToSync}>
+            <UploadCloud size={15} aria-hidden="true" />
+            Tạo lịch đồng bộ
+          </button>
+          <div className="splitBtn primary" ref={sqlDropRef} style={{ position: "relative" }}>
+            <button type="button" className="splitMain" onClick={onDownloadFull}>
+              <Download size={15} aria-hidden="true" />
+              Xuất file SQL
+            </button>
+            <button
+              type="button"
+              className="splitArrow"
+              aria-label="Thêm tùy chọn xuất"
+              onClick={() => setSqlDropOpen((value) => !value)}
+            >
+              <ChevronDown size={13} aria-hidden="true" />
+            </button>
+            {sqlDropOpen && (
+              <div className="dropdown">
+                <button type="button" onClick={() => { onDownloadCreate(); setSqlDropOpen(false); }}>
+                  <Database size={14} aria-hidden="true" />
+                  Xuất lệnh tạo bảng
+                </button>
+                <button type="button" onClick={() => { onDownloadInsert(); setSqlDropOpen(false); }}>
+                  <Download size={14} aria-hidden="true" />
+                  Xuất lệnh chèn dữ liệu
+                </button>
+                <hr />
+                <button type="button" onClick={() => { onDownloadFull(); setSqlDropOpen(false); }}>
+                  <Download size={14} aria-hidden="true" />
+                  Xuất tất cả
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <div className="settingsRow">
+        <label>
+          Tên bảng
+          <input
+            value={project.tableName}
+            onChange={(event) => onPatchProject({ tableName: event.target.value || "import_data" })}
+          />
+        </label>
+        <label>
+          Dòng tiêu đề
+          <input
+            type="number"
+            min="1"
+            max={Math.max(project.rawRows?.length || 1, 1)}
+            value={(project.headerRowIndex ?? 0) + 1}
+            disabled={!project.rawRows?.length}
+            onChange={(event) => onChangeHeaderRow(event.target.value)}
+          />
+        </label>
+        <label>
+          Loại cơ sở dữ liệu
+          <span className="selectWrap">
+            <select value={project.dialect} onChange={(event) => onChangeDialect(event.target.value)}>
+              {DIALECTS.map((dialect) => <option key={dialect}>{dialect}</option>)}
+            </select>
+            <ChevronDown size={15} aria-hidden="true" />
+          </span>
+        </label>
+      </div>
+
+      <nav className="tabs" aria-label="Chế độ xem">
+        <button type="button" className={activeTab === "schema" ? "active" : ""} onClick={() => onTabChange("schema")}>
+          <Settings2 size={15} aria-hidden="true" />
+          Cột & kiểu dữ liệu
+        </button>
+        <button type="button" className={activeTab === "data" ? "active" : ""} onClick={() => onTabChange("data")}>
+          <FileSpreadsheet size={15} aria-hidden="true" />
+          Dữ liệu mẫu
+        </button>
+        <button type="button" className={activeTab === "sql" ? "active" : ""} onClick={() => onTabChange("sql")}>
+          <Database size={15} aria-hidden="true" />
+          SQL
+        </button>
+      </nav>
+
+      {activeTab === "schema" && (
+        <div className="tablePanel">
+          <table>
+            <thead>
+              <tr>
+                <th>Tên gốc</th>
+                <th>Tên cột trong bảng</th>
+                <th>Kiểu dữ liệu</th>
+                <th>Cho phép trống</th>
+                <th>Bao gồm</th>
+              </tr>
+            </thead>
+            <tbody>
+              {project.columns.map((column) => (
+                <tr key={column.id}>
+                  <td>{column.sourceName}</td>
+                  <td>
+                    <input value={column.name} onChange={(event) => onPatchColumn(column.id, { name: event.target.value })} />
+                  </td>
+                  <td>
+                    <select value={column.type} onChange={(event) => onPatchColumn(column.id, { type: event.target.value })}>
+                      {TYPE_OPTIONS[project.dialect].map((type) => <option key={type}>{type}</option>)}
+                      {!TYPE_OPTIONS[project.dialect].includes(column.type) && <option>{column.type}</option>}
+                    </select>
+                  </td>
+                  <td>
+                    <input type="checkbox" checked={column.nullable} onChange={(event) => onPatchColumn(column.id, { nullable: event.target.checked })} />
+                  </td>
+                  <td>
+                    <input type="checkbox" checked={column.include} onChange={(event) => onPatchColumn(column.id, { include: event.target.checked })} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeTab === "data" && (
+        <div className="tablePanel dataPanel">
+          <table>
+            <thead>
+              <tr>{project.columns.map((column) => <th key={column.id}>{column.sourceName}</th>)}</tr>
+            </thead>
+            <tbody>
+              {previewRows.map((row, rowIndex) => (
+                <tr key={`${rowIndex}-${row.join("|")}`}>
+                  {project.columns.map((column, colIndex) => <td key={column.id}>{String(row[colIndex] ?? "")}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeTab === "sql" && (
+        <div className="sqlPanel">
+          <section className="sqlSection">
+            <div className="sqlHeader">
+              <h3>Lệnh tạo bảng</h3>
+              <div>
+                <button type="button" onClick={() => onCopyText(project.createSql)}>
+                  <Clipboard size={13} aria-hidden="true" />
+                  Sao chép
+                </button>
+                <button type="button" onClick={onDownloadCreate}>
+                  <Download size={13} aria-hidden="true" />
+                  Tải xuống
+                </button>
+              </div>
+            </div>
+            <textarea className="sqlBox split" value={project.createSql} readOnly spellCheck="false" />
+          </section>
+          <section className="sqlSection">
+            <div className="sqlHeader">
+              <h3>Lệnh chèn dữ liệu</h3>
+              <div>
+                <button type="button" onClick={() => onCopyText(project.insertPreviewSql)}>
+                  <Clipboard size={13} aria-hidden="true" />
+                  Sao chép
+                </button>
+                <button type="button" onClick={onDownloadInsert}>
+                  <Download size={13} aria-hidden="true" />
+                  Tải toàn bộ
+                </button>
+              </div>
+            </div>
+            <textarea className="sqlBox split" value={project.insertPreviewSql} readOnly spellCheck="false" />
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function App() {
   const fileInputRef = useRef(null);
   const linkInputRef = useRef(null);
@@ -622,12 +896,31 @@ export default function App() {
   const [setupNotice, setSetupNotice] = useState("");
   const [setupFocusJob, setSetupFocusJob] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [apiOnline, setApiOnline] = useState(null);
 
   const previewRows = useMemo(() => (project?.rows || []).slice(0, 60), [project]);
   const includedColumns = useMemo(() => project?.columns.filter((column) => column.include) || [], [project]);
 
   useEffect(() => {
     refreshProjects().catch((error) => setMessage(`Không tải được danh sách đã lưu: ${error.message}`));
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    async function ping() {
+      try {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), 3000);
+        await fetch(`${SYNC_API_URL}/api/health`, { signal: controller.signal });
+        window.clearTimeout(timer);
+        if (alive) setApiOnline(true);
+      } catch {
+        if (alive) setApiOnline(false);
+      }
+    }
+    ping();
+    const timer = window.setInterval(ping, 15000);
+    return () => { alive = false; window.clearInterval(timer); };
   }, []);
 
   async function refreshProjects() {
@@ -869,288 +1162,121 @@ export default function App() {
   }
 
   return (
-    <main className="app">
-      <section className="sidebar">
-        <div className="brand">
-          <Database aria-hidden="true" />
-          <div>
-            <h1>PowerBI Data DTL</h1>
-            <p>Import, cấu hình, theo dõi sync</p>
+    <>
+      <input
+        ref={fileInputRef}
+        className="hiddenInput"
+        type="file"
+        accept=".xls,.xlsx,.xlsm,.csv,.tsv,text/csv"
+        onChange={(event) => handleFile(event.target.files?.[0])}
+      />
+
+      <div className="app">
+        <header className="appHeader">
+          <div className="appBrand">
+            <Database size={20} aria-hidden="true" />
+            <span>PowerBI Data DTL</span>
           </div>
-        </div>
 
-        <nav className="modeNav" aria-label="Chế độ làm việc">
-          <button type="button" className={activeMode === "builder" ? "active" : ""} onClick={() => setActiveMode("builder")}>
-            <FileSpreadsheet size={17} aria-hidden="true" />
-            SQL Import
-          </button>
-          <button type="button" className={activeMode === "setup" ? "active" : ""} onClick={() => setActiveMode("setup")}>
-            <Settings2 size={17} aria-hidden="true" />
-            Cấu hình Sync
-          </button>
-          <button type="button" className={activeMode === "sync" ? "active" : ""} onClick={() => setActiveMode("sync")}>
-            <Server size={17} aria-hidden="true" />
-            Theo dõi Sync
-          </button>
-        </nav>
+          <nav className="appNav" aria-label="Điều hướng chính">
+            <button type="button" className={activeMode === "builder" ? "active" : ""} onClick={() => setActiveMode("builder")}>
+              <FileSpreadsheet size={16} aria-hidden="true" />
+              Nhập dữ liệu
+            </button>
+            <button type="button" className={activeMode === "setup" ? "active" : ""} onClick={() => setActiveMode("setup")}>
+              <Settings2 size={16} aria-hidden="true" />
+              Cài đặt
+            </button>
+            <button type="button" className={activeMode === "sync" ? "active" : ""} onClick={() => setActiveMode("sync")}>
+              <Server size={16} aria-hidden="true" />
+              Giám sát
+            </button>
+          </nav>
 
-        {activeMode === "builder" && (
-          <>
-        <div className="historyHeader">
-          <span><History size={16} aria-hidden="true" /> Đã lưu</span>
-          <button type="button" className="iconButton" title="Tải lại danh sách" onClick={refreshProjects}>
-            <RefreshCcw size={16} aria-hidden="true" />
-          </button>
-        </div>
-
-        <div className="historyList">
-          {projects.length === 0 && <p className="emptyText">Chưa có dự án nào được lưu.</p>}
-          {projects.map((item) => (
-            <div className="historyItem" key={item.id}>
-              <button type="button" onClick={() => loadProject(item.id)}>
-                <strong>{item.name}</strong>
-                <span>{item.fileName}</span>
-                <small>{formatDateTime(item.updatedAt)}</small>
-              </button>
-              <button type="button" className="iconButton danger" title="Xóa project" onClick={() => removeProject(item.id)}>
-                <Trash2 size={16} aria-hidden="true" />
-              </button>
-            </div>
-          ))}
-        </div>
-          </>
-        )}
-      </section>
-
-      <section className="workspace">
-        {activeMode === "builder" && (
-          <input
-            ref={fileInputRef}
-            className="hiddenInput"
-            type="file"
-            accept=".xls,.xlsx,.xlsm,.csv,.tsv,text/csv"
-            onChange={(event) => handleFile(event.target.files?.[0])}
-          />
-        )}
-        {activeMode === "setup" ? (
-          <SyncSetup notice={setupNotice} focusJobName={setupFocusJob?.name} focusToken={setupFocusJob?.token} />
-        ) : activeMode === "sync" ? (
-          <SyncMonitor onEditJob={editSyncJob} />
-        ) : !project ? (
-          <div className="welcome">
-            <FolderOpen size={42} aria-hidden="true" />
-            <h2>Chọn một file để bắt đầu</h2>
-            <p>Hệ thống sẽ đọc header, giữ đầy đủ cột, suy luận kiểu dữ liệu và tạo query SQL import có thể chỉnh sửa.</p>
-            <div className="importSourcePanel">
-              <div className="importTwoButtons" role="group" aria-label="Chọn nguồn SQL Import">
-                <button type="button" className={importSourceMode === "file" ? "active" : ""} onClick={() => {
-                  setImportSourceMode("file");
-                  fileInputRef.current?.click();
-                }}>
-                  <UploadCloud size={16} aria-hidden="true" />
-                  File
-                </button>
-                <button type="button" className={importSourceMode === "link" ? "active" : ""} onClick={() => {
-                  setImportSourceMode("link");
-                  if (importLink.trim()) {
-                    handleImportLink();
-                  } else {
-                    setTimeout(() => linkInputRef.current?.focus(), 0);
-                  }
-                }} disabled={isReadingLink}>
-                  <Link2 size={16} aria-hidden="true" />
-                  {isReadingLink ? "Đang đọc" : "Dán link"}
-                </button>
-              </div>
-              {importSourceMode === "link" && (
-                <input
-                  ref={linkInputRef}
-                  className="importLinkInput"
-                  value={importLink}
-                  placeholder="Dán link SharePoint, OneDrive, Google Sheet, Excel Online..."
-                  onChange={(event) => setImportLink(event.target.value)}
-                  onPaste={(event) => {
-                    const pasted = event.clipboardData.getData("text");
-                    if (pasted) setTimeout(() => handleImportLink(pasted), 0);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") handleImportLink();
-                  }}
-                />
-              )}
-              <small>.xls, .xlsx, .xlsm, .csv, .tsv, SharePoint/OneDrive, Google Sheet</small>
-            </div>
+          <div className="appStatus">
+            <div className={`statusDot ${apiOnline === true ? "online" : apiOnline === false ? "offline" : ""}`} />
+            <span>{apiOnline === true ? "Hệ thống hoạt động" : apiOnline === false ? "Mất kết nối" : ""}</span>
           </div>
-        ) : (
-          <>
-            <header className="topbar">
-              <div>
-                <p className="eyebrow">{project.fileName}{project.sheetName ? ` / ${project.sheetName}` : ""}</p>
-                <h2>{project.name}</h2>
-                <p className="meta">{project.rows.length.toLocaleString("vi-VN")} dòng, {project.columns.length} cột, {includedColumns.length} cột xuất SQL</p>
-              </div>
-              <div className="actions">
-                <button type="button" onClick={() => setProject(null)}>
-                  <FolderOpen size={17} aria-hidden="true" />
-                  File/link khác
-                </button>
-                <button type="button" onClick={saveCurrentProject}>
-                  <Save size={17} aria-hidden="true" />
-                  Lưu
-                </button>
-                <button type="button" onClick={copyFullSql}>
-                  {copied ? <Check size={17} aria-hidden="true" /> : <Clipboard size={17} aria-hidden="true" />}
-                  {copied ? "Đã copy" : "Copy SQL"}
-                </button>
-                <button type="button" onClick={addCurrentProjectToSync}>
-                  <UploadCloud size={17} aria-hidden="true" />
-                  Đưa vào Sync
-                </button>
-                <button type="button" className="primary" onClick={downloadFullSql}>
-                  <Download size={17} aria-hidden="true" />
-                  Tải .sql
-                </button>
-              </div>
-            </header>
+        </header>
 
-            <div className="settingsRow">
-              <label>
-                Tên bảng
-                <input value={project.tableName} onChange={(event) => patchProject({ tableName: event.target.value || "import_data" })} />
-              </label>
-              <label>
-                Dòng header
-                <input
-                  type="number"
-                  min="1"
-                  max={Math.max(project.rawRows?.length || 1, 1)}
-                  value={(project.headerRowIndex ?? 0) + 1}
-                  disabled={!project.rawRows?.length}
-                  onChange={(event) => changeHeaderRow(event.target.value)}
-                />
-              </label>
-              <label>
-                Hệ SQL
-                <span className="selectWrap">
-                  <select value={project.dialect} onChange={(event) => changeDialect(event.target.value)}>
-                    {DIALECTS.map((dialect) => <option key={dialect}>{dialect}</option>)}
-                  </select>
-                  <ChevronDown size={16} aria-hidden="true" />
-                </span>
-              </label>
+        <section className="workspace">
+          {activeMode === "setup" ? (
+            <SyncSetup notice={setupNotice} focusJobName={setupFocusJob?.name} focusToken={setupFocusJob?.token} />
+          ) : activeMode === "sync" ? (
+            <SyncMonitor onEditJob={editSyncJob} />
+          ) : !project ? (
+            <div className="welcome">
+              <div className="uploadCard">
+                <FolderOpen size={36} aria-hidden="true" />
+                <h2>Chọn file để bắt đầu</h2>
+                <p>Hỗ trợ .xls, .xlsx, .csv, .tsv · SharePoint · Google Sheet · OneDrive</p>
+                <div className="uploadActions">
+                  <button type="button" className="btn" onClick={() => {
+                    setImportSourceMode("file");
+                    fileInputRef.current?.click();
+                  }}>
+                    <UploadCloud size={16} aria-hidden="true" />
+                    Chọn file
+                  </button>
+                  <button type="button" className="btn" disabled={isReadingLink} onClick={() => {
+                    setImportSourceMode("link");
+                    if (importLink.trim()) {
+                      handleImportLink();
+                    } else {
+                      setTimeout(() => linkInputRef.current?.focus(), 0);
+                    }
+                  }}>
+                    <Link2 size={16} aria-hidden="true" />
+                    {isReadingLink ? "Đang đọc..." : "Dán link"}
+                  </button>
+                </div>
+                {importSourceMode === "link" && (
+                  <input
+                    ref={linkInputRef}
+                    className="importLinkInput"
+                    value={importLink}
+                    placeholder="Dán link SharePoint, OneDrive, Google Sheet, Excel Online..."
+                    onChange={(event) => setImportLink(event.target.value)}
+                    onPaste={(event) => {
+                      const pasted = event.clipboardData.getData("text");
+                      if (pasted) setTimeout(() => handleImportLink(pasted), 0);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") handleImportLink();
+                    }}
+                  />
+                )}
+              </div>
             </div>
-
-            <nav className="tabs" aria-label="Các chế độ xem">
-              <button type="button" className={activeTab === "schema" ? "active" : ""} onClick={() => setActiveTab("schema")}>
-                <Settings2 size={16} aria-hidden="true" />
-                Cột & kiểu dữ liệu
-              </button>
-              <button type="button" className={activeTab === "data" ? "active" : ""} onClick={() => setActiveTab("data")}>
-                <FileSpreadsheet size={16} aria-hidden="true" />
-                Dữ liệu mẫu
-              </button>
-              <button type="button" className={activeTab === "sql" ? "active" : ""} onClick={() => setActiveTab("sql")}>
-                <Database size={16} aria-hidden="true" />
-                SQL
-              </button>
-            </nav>
-
-            {activeTab === "schema" && (
-              <div className="tablePanel">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Gốc</th>
-                      <th>Tên cột SQL</th>
-                      <th>Kiểu dữ liệu</th>
-                      <th>Null</th>
-                      <th>Xuất</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {project.columns.map((column) => (
-                      <tr key={column.id}>
-                        <td>{column.sourceName}</td>
-                        <td>
-                          <input value={column.name} onChange={(event) => patchColumn(column.id, { name: event.target.value })} />
-                        </td>
-                        <td>
-                          <select value={column.type} onChange={(event) => patchColumn(column.id, { type: event.target.value })}>
-                            {TYPE_OPTIONS[project.dialect].map((type) => <option key={type}>{type}</option>)}
-                            {!TYPE_OPTIONS[project.dialect].includes(column.type) && <option>{column.type}</option>}
-                          </select>
-                        </td>
-                        <td>
-                          <input type="checkbox" checked={column.nullable} onChange={(event) => patchColumn(column.id, { nullable: event.target.checked })} />
-                        </td>
-                        <td>
-                          <input type="checkbox" checked={column.include} onChange={(event) => patchColumn(column.id, { include: event.target.checked })} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {activeTab === "data" && (
-              <div className="tablePanel dataPanel">
-                <table>
-                  <thead>
-                    <tr>{project.columns.map((column) => <th key={column.id}>{column.sourceName}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {previewRows.map((row, rowIndex) => (
-                      <tr key={`${rowIndex}-${row.join("|")}`}>
-                        {project.columns.map((column, colIndex) => <td key={column.id}>{String(row[colIndex] ?? "")}</td>)}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {activeTab === "sql" && (
-              <div className="sqlPanel">
-                <section className="sqlSection">
-                  <div className="sqlHeader">
-                    <h3>SQL tạo bảng</h3>
-                    <div>
-                      <button type="button" onClick={() => copyText(project.createSql)}>
-                        <Clipboard size={16} aria-hidden="true" />
-                        Copy
-                      </button>
-                      <button type="button" onClick={() => downloadSql(project.createSql, "create_table")}>
-                        <Download size={16} aria-hidden="true" />
-                        Tải
-                      </button>
-                    </div>
-                  </div>
-                  <textarea className="sqlBox split" value={project.createSql} readOnly spellCheck="false" />
-                </section>
-                <section className="sqlSection">
-                  <div className="sqlHeader">
-                    <h3>SQL insert dữ liệu</h3>
-                    <div>
-                      <button type="button" onClick={() => copyText(project.insertPreviewSql)}>
-                        <Clipboard size={16} aria-hidden="true" />
-                        Copy preview
-                      </button>
-                      <button type="button" onClick={downloadFullInsertSql}>
-                        <Download size={16} aria-hidden="true" />
-                        Tải full
-                      </button>
-                    </div>
-                  </div>
-                  <textarea className="sqlBox split" value={project.insertPreviewSql} readOnly spellCheck="false" />
-                </section>
-              </div>
-            )}
-          </>
-        )}
-
-        {activeMode === "builder" && message && <div className="status">{message}</div>}
-      </section>
-    </main>
+          ) : (
+            <ProjectWorkspace
+              project={project}
+              projects={projects}
+              activeTab={activeTab}
+              previewRows={previewRows}
+              includedColumns={includedColumns}
+              copied={copied}
+              onTabChange={setActiveTab}
+              onPatchProject={patchProject}
+              onPatchColumn={patchColumn}
+              onSave={saveCurrentProject}
+              onCopyFull={copyFullSql}
+              onCopyText={copyText}
+              onDownloadFull={downloadFullSql}
+              onDownloadCreate={() => downloadSql(project.createSql, "create_table")}
+              onDownloadInsert={downloadFullInsertSql}
+              onAddToSync={addCurrentProjectToSync}
+              onLoadProject={loadProject}
+              onRemoveProject={removeProject}
+              onRefreshProjects={refreshProjects}
+              onClearProject={() => setProject(null)}
+              onChangeDialect={changeDialect}
+              onChangeHeaderRow={changeHeaderRow}
+            />
+          )}
+          {activeMode === "builder" && message && <div className="status">{message}</div>}
+        </section>
+      </div>
+    </>
   );
 }
