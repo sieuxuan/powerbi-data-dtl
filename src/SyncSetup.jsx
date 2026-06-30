@@ -1046,8 +1046,8 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   return (
     <>
       <header className="topbar">
-        <div>
-          <h2>Cấu hình Sync</h2>
+        <div className="topbarMeta">
+          <h2>Cài đặt đồng bộ</h2>
         </div>
         <div className="actions">
           <button type="button" onClick={loadConfig} disabled={isLoading}>
@@ -1078,7 +1078,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
       {isDirty && !error && (
         <div className="syncBanner warning">
           <AlertCircle size={18} aria-hidden="true" />
-          <span>Có thay đổi chưa lưu vào sync/config.yaml. Bấm Lưu cấu hình trước khi chạy sync hoặc chuyển máy.</span>
+          <span>Có thay đổi chưa được lưu. Bấm "Lưu cấu hình" trước khi chạy đồng bộ hoặc chuyển máy.</span>
         </div>
       )}
 
@@ -1087,7 +1087,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
           <nav className="setupTabs" aria-label="Nhóm cấu hình sync">
             <button type="button" className={setupTab === "jobs" ? "active" : ""} onClick={() => setSetupTab("jobs")}>
               <Link2 size={16} aria-hidden="true" />
-              Jobs & wizard
+              Tác vụ
             </button>
             <button type="button" className={setupTab === "system" ? "active" : ""} onClick={() => setSetupTab("system")}>
               <Settings2 size={16} aria-hidden="true" />
@@ -1103,27 +1103,31 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
             <section className="setupSection wizardPanel">
               <div className="wizardHeader">
                 <div>
-                  <p className="eyebrow">Wizard thêm job</p>
-                  <h3>File/link → Preview → Mapping bảng</h3>
+                  <p className="eyebrow">Thêm tác vụ đồng bộ</p>
+                  <h3>Chọn nguồn → Xem trước → Ghép cột vào bảng</h3>
                 </div>
                 <button type="button" className="secondaryButton" onClick={() => setWizardOpen(false)}>
                   Đóng
                 </button>
               </div>
 
-              <div className="wizardSteps">
-                {[1, 2, 3].map((step) => (
-                  <button
-                    key={step}
-                    type="button"
-                    className={wizardStep === step ? "active" : ""}
-                    onClick={() => setWizardStep(step)}
-                  >
-                    <span>{step}</span>
-                    {step === 1 && "File/link"}
-                    {step === 2 && "Preview"}
-                    {step === 3 && "Mapping"}
-                  </button>
+              <div className="wizardStepper">
+                {[
+                  { step: 1, label: "Chọn nguồn" },
+                  { step: 2, label: "Xem trước" },
+                  { step: 3, label: "Ghép cột" },
+                ].map((item, index, arr) => (
+                  <div key={item.step} style={{ display: "contents" }}>
+                    <button
+                      type="button"
+                      className={`wizardStep${wizardStep === item.step ? " active" : wizardStep > item.step ? " done" : ""}`}
+                      onClick={() => setWizardStep(item.step)}
+                    >
+                      <span className="stepNum">{wizardStep > item.step ? "✓" : item.step}</span>
+                      {item.label}
+                    </button>
+                    {index < arr.length - 1 && <div className="wizardConnector" />}
+                  </div>
                 ))}
               </div>
               {wizardMessage && <div className="testResult info">{wizardMessage}</div>}
@@ -1858,7 +1862,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     {isTestingWebhook ? "Đang test" : "Test webhook"}
                   </button>
                   <details className="advancedPanel wideField">
-                    <summary>Nâng cao</summary>
+                    <summary>Tùy chọn nâng cao</summary>
                     <div className="setupGrid">
                       <label>
                         Timeout giây
