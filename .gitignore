@@ -18,3 +18,6 @@ sync/exports/*
 !sync/logs/.gitkeep
 !sync/downloads/.gitkeep
 !sync/uploads/.gitkeep
+
+.agents/
+.agent/

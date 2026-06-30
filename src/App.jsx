@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -912,12 +912,26 @@ export default function App() {
   const [setupFocusJob, setSetupFocusJob] = useState(null);
   const [copied, setCopied] = useState(false);
   const [apiOnline, setApiOnline] = useState(null);
+  const [messageHiding, setMessageHiding] = useState(false);
+  const messageTimerRef = useRef(null);
 
   const previewRows = useMemo(() => (project?.rows || []).slice(0, 60), [project]);
   const includedColumns = useMemo(() => project?.columns.filter((column) => column.include) || [], [project]);
 
+  const showMessage = useCallback((text) => {
+    if (messageTimerRef.current) clearTimeout(messageTimerRef.current);
+    setMessageHiding(false);
+    setMessage(text);
+    if (text) {
+      messageTimerRef.current = setTimeout(() => {
+        setMessageHiding(true);
+        setTimeout(() => { setMessage(""); setMessageHiding(false); }, 300);
+      }, 4500);
+    }
+  }, []);
+
   useEffect(() => {
-    refreshProjects().catch((error) => setMessage(`Không tải được danh sách đã lưu: ${error.message}`));
+    refreshProjects().catch((error) => showMessage(`Không tải được danh sách đã lưu: ${error.message}`));
   }, []);
 
   useEffect(() => {
@@ -945,17 +959,17 @@ export default function App() {
 
   async function loadFileIntoProject(file, metadata = {}) {
     if (!file) return;
-    setMessage("Đang đọc file...");
+    showMessage("Đang đọc file...");
     await allowUiUpdate();
     try {
       const parsed = await readFile(file);
       const next = applyMappingPreset({ ...buildProject(file.name, parsed), ...metadata });
       setProject(next);
       setActiveTab("schema");
-      setMessage(`Đã đọc ${parsed.rows.length.toLocaleString("vi-VN")} dòng và ${parsed.headers.length} cột.${next.mappingPresetApplied ? " Đã áp mapping preset." : ""}`);
+      showMessage(`Đã đọc ${parsed.rows.length.toLocaleString("vi-VN")} dòng và ${parsed.headers.length} cột.${next.mappingPresetApplied ? " Đã áp mapping preset." : ""}`);
       await refreshProjects();
     } catch (error) {
-      setMessage(`Không đọc được file: ${error.message}`);
+      showMessage(`Không đọc được file: ${error.message}`);
     }
   }
 
@@ -968,7 +982,7 @@ export default function App() {
     if (!url) return;
     setIsReadingLink(true);
     setImportLink(url);
-    setMessage("Đang tải file từ link online...");
+    showMessage("Đang tải file từ link online...");
     await allowUiUpdate();
     try {
       const result = await syncApi("/api/files/fetch-link", {
@@ -981,7 +995,7 @@ export default function App() {
         sourceKind: result.source_kind || "online",
       });
     } catch (error) {
-      setMessage(`Không đọc được link: ${error.message}. Link Google Sheet/SharePoint cần được chia sẻ quyền xem hoặc tải xuống.`);
+      showMessage(`Không đọc được link: ${error.message}. Link Google Sheet/SharePoint cần được chia sẻ quyền xem hoặc tải xuống.`);
     } finally {
       setIsReadingLink(false);
     }
@@ -1012,7 +1026,7 @@ export default function App() {
     saveMappingPreset(saved);
     setProject(saved);
     await refreshProjects();
-    setMessage("Đã lưu dự án vào trình duyệt.");
+    showMessage("Đã lưu dự án vào trình duyệt.");
   }
 
   async function loadProject(id) {
@@ -1020,7 +1034,7 @@ export default function App() {
     if (selected) {
       setProject(withSqlParts(selected));
       setActiveTab("schema");
-      setMessage(`Đã mở lại ${selected.name}.`);
+      showMessage(`Đã mở lại ${selected.name}.`);
     }
   }
 
@@ -1028,7 +1042,7 @@ export default function App() {
     await deleteProject(id);
     if (project?.id === id) setProject(null);
     await refreshProjects();
-    setMessage("Đã xóa dự án đã lưu.");
+    showMessage("Đã xóa dự án đã lưu.");
   }
 
   function changeDialect(dialect) {
@@ -1058,7 +1072,7 @@ export default function App() {
       return withSqlParts(next);
     });
     setActiveTab("schema");
-    setMessage(`Đã chọn dòng ${nextHeaderRowIndex + 1} làm header.`);
+    showMessage(`Đã chọn dòng ${nextHeaderRowIndex + 1} làm header.`);
   }
 
   async function copyText(text) {
@@ -1069,10 +1083,10 @@ export default function App() {
 
   async function copyFullSql() {
     if (!project) return;
-    setMessage("Đang tạo SQL đầy đủ để copy...");
+    showMessage("Đang tạo SQL đầy đủ để copy...");
     await allowUiUpdate();
     await copyText(`${project.createSql}\n\n${generateInsertSql(project)}`);
-    setMessage("Đã copy SQL đầy đủ.");
+    showMessage("Đã copy SQL đầy đủ.");
   }
 
   function downloadChunks(chunks, suffix) {
@@ -1094,16 +1108,16 @@ export default function App() {
 
   function downloadFullSql() {
     if (!project) return;
-    setMessage("Đang tạo file SQL đầy đủ...");
+    showMessage("Đang tạo file SQL đầy đủ...");
     setTimeout(() => {
       downloadChunks([project.createSql, "\n\n", ...buildInsertSqlChunks(project)], "full");
-      setMessage("Đã tạo file SQL đầy đủ.");
+      showMessage("Đã tạo file SQL đầy đủ.");
     }, 0);
   }
 
   async function addCurrentProjectToSync() {
     if (!project) return;
-    setMessage("Đang đưa dữ liệu hiện tại vào Sync...");
+    showMessage("Đang đưa dữ liệu hiện tại vào Sync...");
     await allowUiUpdate();
     try {
       const configResponse = await syncApi("/api/config");
@@ -1156,18 +1170,18 @@ export default function App() {
       saveMappingPreset(project);
       setSetupNotice(`Đã thêm job sync cho bảng ${project.tableName}.`);
       setActiveMode("setup");
-      setMessage(`Đã thêm job sync cho bảng ${project.tableName}.`);
+      showMessage(`Đã thêm job sync cho bảng ${project.tableName}.`);
     } catch (syncError) {
-      setMessage(`Không thêm được vào Sync: ${syncError.message}`);
+      showMessage(`Không thêm được vào Sync: ${syncError.message}`);
     }
   }
 
   function downloadFullInsertSql() {
     if (!project) return;
-    setMessage("Đang tạo file INSERT đầy đủ...");
+    showMessage("Đang tạo file INSERT đầy đủ...");
     setTimeout(() => {
       downloadChunks(buildInsertSqlChunks(project), "insert_data_full");
-      setMessage("Đã tạo file INSERT đầy đủ.");
+      showMessage("Đã tạo file INSERT đầy đủ.");
     }, 0);
   }
 
@@ -1292,7 +1306,7 @@ export default function App() {
               onChangeHeaderRow={changeHeaderRow}
             />
           )}
-          {activeMode === "builder" && message && <div className="status">{message}</div>}
+          {activeMode === "builder" && message && <div className={`status${messageHiding ? " hiding" : ""}`}>{message}</div>}
         </section>
       </div>
     </>
