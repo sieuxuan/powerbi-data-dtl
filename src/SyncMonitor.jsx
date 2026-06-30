@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity, AlertCircle, Pencil, Play, RefreshCcw } from "lucide-react";
+import { Activity, AlertCircle, ChevronDown, Pencil, Play, RefreshCcw } from "lucide-react";
 
 export const SYNC_API_URL = import.meta.env.VITE_SYNC_API_URL || "http://127.0.0.1:8765";
 
@@ -22,7 +22,7 @@ function syncStatusLabel(status) {
     success: "Thành công",
     failed: "Lỗi",
     skipped: "Bỏ qua",
-    mismatch: "Lệch schema",
+    mismatch: "Lệch cấu trúc",
   };
   return labels[status] || status || "Chưa chạy";
 }
@@ -88,12 +88,24 @@ export default function SyncMonitor({ onEditJob }) {
   const [isOffline, setIsOffline] = useState(false);
   const [message, setMessage] = useState("");
   const [health, setHealth] = useState(null);
+  const [openRunDrop, setOpenRunDrop] = useState(null);
+  const [openAllDrop, setOpenAllDrop] = useState(false);
+  const allDropRef = useRef(null);
 
   const runningCount = jobs.filter((job) => job.running).length;
   const latestSuccess = logs.filter((row) => row.status === "success").length;
   const latestFailures = logs.filter((row) => row.status === "failed").length;
   const scheduler = health?.scheduler;
   const schedulerOffline = !isOffline && scheduler && !scheduler.running;
+
+  useEffect(() => {
+    function handleClick(event) {
+      if (allDropRef.current && !allDropRef.current.contains(event.target)) setOpenAllDrop(false);
+      setOpenRunDrop(null);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -153,37 +165,51 @@ export default function SyncMonitor({ onEditJob }) {
   return (
     <>
       <header className="topbar">
-        <div>
-          <h2>Sync Monitor</h2>
-          <p className="meta">{jobs.length} job cấu hình, {runningCount} đang chạy, {logs.length} log gần nhất</p>
+        <div className="topbarMeta">
+          <h2>Giám sát đồng bộ</h2>
+          <p className="metaLine">{jobs.length} tác vụ · {runningCount} đang chạy · {logs.length} lần ghi gần nhất</p>
         </div>
         <div className="actions">
-          <button type="button" onClick={() => refreshSyncData()}>
-            <RefreshCcw size={17} aria-hidden="true" />
+          <button type="button" className="btn" onClick={() => refreshSyncData()}>
+            <RefreshCcw size={15} aria-hidden="true" />
             Tải lại
           </button>
-          <button type="button" onClick={() => triggerRunAll(false)}>
-            <Play size={17} aria-hidden="true" />
-            Chạy tất cả
-          </button>
-          <button type="button" className="primary" title="Chạy lại kể cả khi file chưa thay đổi hash" onClick={() => triggerRunAll(true)}>
-            <Play size={17} aria-hidden="true" />
-            Chạy lại bỏ qua hash
-          </button>
+          <div className="splitBtn" ref={allDropRef} style={{ position: "relative" }}>
+            <button type="button" className="splitMain" onClick={() => triggerRunAll(false)}>
+              <Play size={15} aria-hidden="true" />
+              Đồng bộ tất cả
+            </button>
+            <button
+              type="button"
+              className="splitArrow"
+              aria-label="Thêm tùy chọn đồng bộ"
+              onClick={() => setOpenAllDrop((value) => !value)}
+            >
+              <ChevronDown size={13} aria-hidden="true" />
+            </button>
+            {openAllDrop && (
+              <div className="dropdown">
+                <button type="button" onClick={() => { triggerRunAll(true); setOpenAllDrop(false); }}>
+                  <Play size={14} aria-hidden="true" />
+                  Bắt buộc đồng bộ lại
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
       {isOffline && (
         <div className="syncBanner error">
           <AlertCircle size={18} aria-hidden="true" />
-          <span>{message || "Sync API đang offline."}</span>
+          <span>{message || "Không kết nối được dịch vụ đồng bộ."}</span>
         </div>
       )}
 
       {schedulerOffline && (
         <div className="syncBanner warning">
           <AlertCircle size={18} aria-hidden="true" />
-          <span>API đang mở nhưng bộ chạy lịch chưa bật. Mở app bằng run.bat/run.ps1 để job tự chạy theo lịch.</span>
+          <span>Dịch vụ đang chạy nhưng bộ hẹn lịch chưa bật. Mở ứng dụng bằng run.bat/run.ps1 để các tác vụ tự chạy theo lịch.</span>
         </div>
       )}
 
@@ -195,21 +221,24 @@ export default function SyncMonitor({ onEditJob }) {
       )}
 
       <div className="syncMetrics">
-        <div>
-          <span>Jobs</span>
-          <strong>{jobs.length}</strong>
+        <div className="metricCard">
+          <div className="metricLabel">Tác vụ</div>
+          <div className="metricValue">{jobs.length}</div>
         </div>
-        <div>
-          <span>Đang chạy</span>
-          <strong>{runningCount}</strong>
+        <div className={`metricCard${runningCount > 0 ? " running" : ""}`}>
+          <div className="metricLabel">Đang chạy</div>
+          <div className="metricValue">
+            {runningCount}
+            {runningCount > 0 && <span className="pulseDot" />}
+          </div>
         </div>
-        <div>
-          <span>Log thành công</span>
-          <strong>{latestSuccess}</strong>
+        <div className="metricCard ok">
+          <div className="metricLabel">Thành công</div>
+          <div className="metricValue">{latestSuccess}</div>
         </div>
-        <div>
-          <span>Log lỗi</span>
-          <strong>{latestFailures}</strong>
+        <div className={`metricCard${latestFailures > 0 ? " alert" : ""}`}>
+          <div className="metricLabel">Lỗi</div>
+          <div className="metricValue">{latestFailures}</div>
         </div>
       </div>
 
@@ -217,27 +246,28 @@ export default function SyncMonitor({ onEditJob }) {
         <table>
           <thead>
             <tr>
-              <th>Job</th>
+              <th>Tác vụ</th>
               <th>Nguồn</th>
-              <th>Bảng</th>
-              <th>Cron</th>
+              <th>Bảng dữ liệu</th>
+              <th>Lịch chạy</th>
               <th>Trạng thái</th>
-              <th>Dòng</th>
-              <th>Hoàn tất</th>
-              <th>Hash</th>
+              <th>Số dòng</th>
+              <th>Hoàn tất lúc</th>
               <th>Thao tác</th>
             </tr>
           </thead>
           <tbody>
             {jobs.length === 0 && (
               <tr>
-                <td colSpan="9">{isLoading ? "Đang tải job..." : "Chưa có job nào trong config."}</td>
+                <td colSpan="8">{isLoading ? "Đang tải..." : "Chưa có tác vụ nào được cấu hình."}</td>
               </tr>
             )}
             {jobs.map((job) => {
               const latest = job.last_run || {};
+              const statusClass = job.running ? "running" : (latest.status || "idle");
+              const isDropOpen = openRunDrop === job.name;
               return (
-                <tr key={job.name}>
+                <tr key={job.name} className={`jobRow ${statusClass}`}>
                   <td>
                     <strong>{job.name}</strong>
                     {latest.error_message && <small className="errorText">{latest.error_message}</small>}
@@ -246,23 +276,51 @@ export default function SyncMonitor({ onEditJob }) {
                   <td>{job.table}</td>
                   <td>{cronLabel(job)}</td>
                   <td>
-                    <span className={`statusPill ${latest.status || "idle"}`}>
-                      {job.running ? progressLabel(job.progress?.state) || "Đang chạy" : syncStatusLabel(latest.status)}
+                    <span className={`statusPill ${statusClass}`}>
+                      {job.running
+                        ? <><span className="pulseDot" />{progressLabel(job.progress?.state) || "Đang chạy"}</>
+                        : syncStatusLabel(latest.status)}
                     </span>
                   </td>
                   <td>{latest.rows_imported ?? 0}</td>
                   <td>{formatSyncDate(latest.finished_at)}</td>
-                  <td className="hashCell">{latest.file_hash || "-"}</td>
                   <td>
                     <div className="rowActions">
-                      <button type="button" onClick={() => triggerRunJob(job.name, false)} disabled={job.running}>
-                        <Play size={15} aria-hidden="true" />
-                      </button>
-                      <button type="button" onClick={() => triggerRunJob(job.name, true)} disabled={job.running}>
-                        Force
-                      </button>
-                      <button type="button" onClick={() => onEditJob?.(job.name)} title="Sửa job">
-                        <Pencil size={15} aria-hidden="true" />
+                      <div className="splitBtn" style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          className="splitMain"
+                          disabled={job.running}
+                          onClick={() => triggerRunJob(job.name, false)}
+                        >
+                          <Play size={13} aria-hidden="true" />
+                          Chạy
+                        </button>
+                        <button
+                          type="button"
+                          className="splitArrow"
+                          disabled={job.running}
+                          aria-label="Thêm tùy chọn chạy"
+                          onMouseDown={(event) => event.stopPropagation()}
+                          onClick={() => setOpenRunDrop(isDropOpen ? null : job.name)}
+                        >
+                          <ChevronDown size={12} aria-hidden="true" />
+                        </button>
+                        {isDropOpen && (
+                          <div className="dropdown">
+                            <button
+                              type="button"
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onClick={() => { triggerRunJob(job.name, true); setOpenRunDrop(null); }}
+                            >
+                              <Play size={13} aria-hidden="true" />
+                              Bắt buộc đồng bộ lại
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <button type="button" onClick={() => onEditJob?.(job.name)} title="Chỉnh sửa tác vụ">
+                        <Pencil size={13} aria-hidden="true" />
                         Sửa
                       </button>
                     </div>
@@ -279,17 +337,17 @@ export default function SyncMonitor({ onEditJob }) {
           <thead>
             <tr>
               <th>Thời gian</th>
-              <th>Job</th>
-              <th>Bảng</th>
+              <th>Tác vụ</th>
+              <th>Bảng dữ liệu</th>
               <th>Trạng thái</th>
-              <th>Dòng</th>
-              <th>Thông điệp</th>
+              <th>Số dòng</th>
+              <th>Thông tin</th>
             </tr>
           </thead>
           <tbody>
             {logs.length === 0 && (
               <tr>
-                <td colSpan="6">{isLoading ? "Đang tải log..." : "Chưa có log đồng bộ."}</td>
+                <td colSpan="6">{isLoading ? "Đang tải..." : "Chưa có lịch sử đồng bộ."}</td>
               </tr>
             )}
             {logs.map((row) => (
