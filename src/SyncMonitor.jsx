@@ -48,17 +48,23 @@ function cronLabel(job) {
 }
 
 export async function syncApi(path, options = {}) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs || 30000);
   let response;
   try {
     response = await fetch(`${SYNC_API_URL}${path}`, {
       ...options,
+      signal: options.signal || controller.signal,
       headers: {
         "Content-Type": "application/json",
         ...(options.headers || {}),
       },
     });
   } catch (error) {
-    throw new Error(`Sync API đang tắt hoặc bị chặn tại ${SYNC_API_URL}. Chạy run.bat hoặc run.ps1 rồi thử lại.`);
+    const reason = error?.name === "AbortError" ? "quá thời gian chờ" : error?.message;
+    throw new Error(`Không gọi được Sync API tại ${SYNC_API_URL}${reason ? ` (${reason})` : ""}. Kiểm tra run.bat/run.ps1 và thử tải lại trang.`);
+  } finally {
+    window.clearTimeout(timeout);
   }
   if (!response.ok) {
     const text = await response.text();
@@ -81,10 +87,13 @@ export default function SyncMonitor({ onEditJob }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isOffline, setIsOffline] = useState(false);
   const [message, setMessage] = useState("");
+  const [health, setHealth] = useState(null);
 
   const runningCount = jobs.filter((job) => job.running).length;
   const latestSuccess = logs.filter((row) => row.status === "success").length;
   const latestFailures = logs.filter((row) => row.status === "failed").length;
+  const scheduler = health?.scheduler;
+  const schedulerOffline = !isOffline && scheduler && !scheduler.running;
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -99,13 +108,15 @@ export default function SyncMonitor({ onEditJob }) {
   async function refreshSyncData() {
     setIsLoading(true);
     try {
-      const [jobsData, logsData] = await Promise.all([
+      const [jobsData, logsData, healthData] = await Promise.all([
         syncApi("/api/jobs"),
         syncApi("/api/logs?limit=100"),
+        syncApi("/api/health"),
       ]);
       if (!isMountedRef.current) return;
       setJobs(jobsData.jobs || []);
       setLogs(logsData.logs || []);
+      setHealth(healthData);
       setIsOffline(false);
       setMessage("");
     } catch (error) {
@@ -166,6 +177,13 @@ export default function SyncMonitor({ onEditJob }) {
         <div className="syncBanner error">
           <AlertCircle size={18} aria-hidden="true" />
           <span>{message || "Sync API đang offline."}</span>
+        </div>
+      )}
+
+      {schedulerOffline && (
+        <div className="syncBanner warning">
+          <AlertCircle size={18} aria-hidden="true" />
+          <span>API đang mở nhưng bộ chạy lịch chưa bật. Mở app bằng run.bat/run.ps1 để job tự chạy theo lịch.</span>
         </div>
       )}
 

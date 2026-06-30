@@ -65,7 +65,7 @@ $Shell = if (Test-Command "pwsh") { "pwsh" } else { "powershell" }
 $ApiCommand = "Set-Location '$Root'; & '$VenvPython' 'sync\main.py' start"
 $WebCommand = "Set-Location '$Root'; npm run dev -- --port 5173"
 
-Write-Step "Bật Sync API"
+Write-Step "Bật bộ chạy lịch + API"
 $ApiProcess = Start-Process $Shell -ArgumentList @("-NoExit", "-Command", $ApiCommand) -PassThru
 
 Write-Step "Bật giao diện web"
@@ -79,7 +79,7 @@ if (-not $NoBrowser) {
 Write-Host ""
 Write-Host "Đã khởi động PowerBI Data DTL." -ForegroundColor Green
 Write-Host "Frontend : http://127.0.0.1:5173/"
-Write-Host "Sync API : http://127.0.0.1:8765/"
+Write-Host "Sync API + lịch tự chạy : http://127.0.0.1:8765/"
 Write-Host "API PID  : $($ApiProcess.Id)"
 Write-Host "Web PID  : $($WebProcess.Id)"
 Write-Host ""

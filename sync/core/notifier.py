@@ -94,6 +94,7 @@ class Notifier:
             "status": result_payload.get("status"),
             "rows_imported": result_payload.get("rows_imported", 0),
             "message": result_payload.get("message"),
+            "schema_change": _schema_change_payload(result_payload),
             "result": result_payload,
         }
         try:
@@ -131,4 +132,17 @@ def _result_payload(result: object) -> dict[str, Any]:
         "file_path": getattr(result, "file_path", None),
         "error_message": getattr(result, "error_message", None),
         "details": getattr(result, "details", {}),
+    }
+
+
+def _schema_change_payload(result_payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Return schema mismatch/change details for webhook consumers."""
+    details = result_payload.get("details") or {}
+    missing = details.get("missing_in_db") or []
+    extra = details.get("extra_in_db") or []
+    if not missing and not extra:
+        return None
+    return {
+        "missing_in_db": missing,
+        "extra_in_db": extra,
     }

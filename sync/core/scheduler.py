@@ -144,7 +144,7 @@ class SyncRuntime:
         except ImportError as exc:
             raise RuntimeError("FastAPI and uvicorn are required. Install dependencies with requirements.txt") from exc
 
-        app = create_app(self.config)
+        app = create_app(self.config, runtime_status=self._scheduler_status)
         uvicorn_config = uvicorn.Config(
             app,
             host=self.config.api.host,
@@ -155,6 +155,26 @@ class SyncRuntime:
         self.api_thread = threading.Thread(target=self.api_server.run, name="sync-api", daemon=True)
         self.api_thread.start()
         LOGGER.info("Sync API listening on http://%s:%s", self.config.api.host, self.config.api.port)
+
+    def _scheduler_status(self) -> dict[str, Any]:
+        """Return scheduler status for the local API health endpoint."""
+        if self.scheduler is None:
+            return {"enabled": False, "running": False, "scheduled_jobs": 0, "next_runs": []}
+        next_runs = []
+        for job in self.scheduler.get_jobs():
+            next_runs.append(
+                {
+                    "id": job.id,
+                    "name": job.name,
+                    "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+                }
+            )
+        return {
+            "enabled": True,
+            "running": bool(getattr(self.scheduler, "running", False)),
+            "scheduled_jobs": len(next_runs),
+            "next_runs": next_runs,
+        }
 
     def _check_updates_on_startup(self) -> None:
         """Run a best-effort GitHub update check in the background."""

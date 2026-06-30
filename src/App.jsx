@@ -22,6 +22,7 @@ import SyncSetup, { uploadFileToSync } from "./SyncSetup.jsx";
 
 const DB_NAME = "sql-import-builder";
 const STORE_NAME = "projects";
+const MAPPING_PRESETS_KEY = "sql-import-mapping-presets-v1";
 const TYPE_INFERENCE_SAMPLE_SIZE = 5000;
 const INSERT_PREVIEW_LIMIT = 200;
 const INSERT_BATCH_SIZE = 1000;
@@ -551,6 +552,62 @@ function makeUniqueJobName(files, baseName) {
   return name;
 }
 
+function mappingPresetKey(fileName) {
+  return String(fileName || "")
+    .replace(/\.[^.]+$/, "")
+    .trim()
+    .toLowerCase();
+}
+
+function loadMappingPresets() {
+  try {
+    return JSON.parse(localStorage.getItem(MAPPING_PRESETS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveMappingPreset(project) {
+  const key = mappingPresetKey(project?.fileName);
+  if (!key || !project?.columns?.length) return;
+  const presets = loadMappingPresets();
+  presets[key] = {
+    updatedAt: new Date().toISOString(),
+    columns: project.columns.map((column) => ({
+      sourceName: column.sourceName,
+      name: column.name,
+      type: column.type,
+      nullable: column.nullable,
+      include: column.include,
+    })),
+  };
+  localStorage.setItem(MAPPING_PRESETS_KEY, JSON.stringify(presets));
+}
+
+function applyMappingPreset(project) {
+  const preset = loadMappingPresets()[mappingPresetKey(project?.fileName)];
+  if (!preset?.columns?.length) return project;
+  const bySource = new Map(preset.columns.map((column) => [column.sourceName, column]));
+  const usedNames = new Set();
+  const columns = project.columns.map((column, index) => {
+    const saved = bySource.get(column.sourceName);
+    if (!saved) {
+      return {
+        ...column,
+        name: cleanSqlName(column.name, `column_${index + 1}`, usedNames),
+      };
+    }
+    return {
+      ...column,
+      name: cleanSqlName(saved.name || column.name, `column_${index + 1}`, usedNames),
+      type: saved.type || column.type,
+      nullable: saved.nullable ?? column.nullable,
+      include: saved.include ?? column.include,
+    };
+  });
+  return withSqlParts({ ...project, columns, mappingPresetApplied: true });
+}
+
 export default function App() {
   const fileInputRef = useRef(null);
   const linkInputRef = useRef(null);
@@ -584,10 +641,10 @@ export default function App() {
     await allowUiUpdate();
     try {
       const parsed = await readFile(file);
-      const next = { ...buildProject(file.name, parsed), ...metadata };
+      const next = applyMappingPreset({ ...buildProject(file.name, parsed), ...metadata });
       setProject(next);
       setActiveTab("schema");
-      setMessage(`Đã đọc ${parsed.rows.length.toLocaleString("vi-VN")} dòng và ${parsed.headers.length} cột.`);
+      setMessage(`Đã đọc ${parsed.rows.length.toLocaleString("vi-VN")} dòng và ${parsed.headers.length} cột.${next.mappingPresetApplied ? " Đã áp mapping preset." : ""}`);
       await refreshProjects();
     } catch (error) {
       setMessage(`Không đọc được file: ${error.message}`);
@@ -644,6 +701,7 @@ export default function App() {
     if (!project) return;
     const saved = withSqlParts({ ...project, updatedAt: new Date().toISOString() });
     await putProject(saved);
+    saveMappingPreset(saved);
     setProject(saved);
     await refreshProjects();
     setMessage("Đã lưu dự án vào trình duyệt.");
@@ -787,6 +845,7 @@ export default function App() {
         method: "POST",
         body: JSON.stringify(nextConfig),
       });
+      saveMappingPreset(project);
       setSetupNotice(`Đã thêm job sync cho bảng ${project.tableName}.`);
       setActiveMode("setup");
       setMessage(`Đã thêm job sync cho bảng ${project.tableName}.`);

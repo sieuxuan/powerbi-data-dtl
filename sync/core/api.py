@@ -95,7 +95,7 @@ class ApiJobRunner:
         return True
 
 
-def create_app(config: AppConfig) -> Any:
+def create_app(config: AppConfig, runtime_status: Any | None = None) -> Any:
     """Create the FastAPI app."""
     try:
         from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -504,11 +504,19 @@ def create_app(config: AppConfig) -> Any:
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
+        scheduler_status = runtime_status() if callable(runtime_status) else {
+            "enabled": False,
+            "running": False,
+            "scheduled_jobs": 0,
+            "next_runs": [],
+            "message": "Scheduler is not attached. Start with python main.py start for automatic jobs.",
+        }
         return {
             "status": "ok",
             "api": "sync",
             "config_path": str(config_path),
             "running": sorted(runner.running_names()),
+            "scheduler": scheduler_status,
         }
 
     @app.get("/api/config")

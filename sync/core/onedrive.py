@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import ipaddress
 import re
+import socket
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +17,7 @@ from .schema_compare import normalize_identifier
 
 LOGGER = logging.getLogger(__name__)
 FILENAME_PATTERN = re.compile(r"filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?", re.IGNORECASE)
+MAX_DOWNLOAD_BYTES = 250 * 1024 * 1024
 
 
 class OneDriveError(RuntimeError):
@@ -44,6 +47,7 @@ def download_onedrive_file(
         raise OneDriveError("httpx is required. Install dependencies with: pip install -r requirements.txt") from exc
 
     download_url = _to_download_url(url)
+    _validate_download_url(download_url)
     download_dir = Path(downloads.dir)
     if not download_dir.is_absolute():
         download_dir = base_dir / download_dir
@@ -51,6 +55,13 @@ def download_onedrive_file(
 
     with httpx.stream("GET", download_url, follow_redirects=True, timeout=120) as response:
         response.raise_for_status()
+        length = response.headers.get("content-length")
+        if length:
+            try:
+                if int(length) > MAX_DOWNLOAD_BYTES:
+                    raise OneDriveError("Downloaded file is too large. Limit is 250 MB.")
+            except ValueError:
+                LOGGER.debug("Ignoring invalid content-length header: %s", length)
         filename = _filename_from_headers(response.headers.get("content-disposition"))
         if not filename:
             filename = _filename_from_url(str(response.url))
@@ -58,10 +69,18 @@ def download_onedrive_file(
             stem = normalize_identifier(table_name, "download")
             filename = f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         target_path = _unique_path(download_dir / _sanitize_filename(filename))
-        with target_path.open("wb") as file_handle:
-            for chunk in response.iter_bytes():
-                if chunk:
-                    file_handle.write(chunk)
+        total_bytes = 0
+        try:
+            with target_path.open("wb") as file_handle:
+                for chunk in response.iter_bytes():
+                    if chunk:
+                        total_bytes += len(chunk)
+                        if total_bytes > MAX_DOWNLOAD_BYTES:
+                            raise OneDriveError("Downloaded file is too large. Limit is 250 MB.")
+                        file_handle.write(chunk)
+        except Exception:
+            target_path.unlink(missing_ok=True)
+            raise
 
     LOGGER.info("Downloaded OneDrive file to %s", target_path)
     return DownloadResult(path=target_path, temporary=not downloads.keep_files)
@@ -107,6 +126,26 @@ def _source_kind(url: str) -> str:
     if "sharepoint.com" in host or "1drv.ms" in host or "onedrive.live.com" in host:
         return "sharepoint"
     return "direct"
+
+
+def _validate_download_url(url: str) -> None:
+    """Reject unsupported or local network URLs before downloading."""
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise OneDriveError("Only http/https links are allowed.")
+    host = parsed.hostname
+    if not host:
+        raise OneDriveError("Download link is missing a hostname.")
+    if host.lower() in {"localhost", "localhost.localdomain"}:
+        raise OneDriveError("Localhost links are not allowed.")
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)}
+    except socket.gaierror as exc:
+        raise OneDriveError(f"Could not resolve download host: {host}") from exc
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_multicast or ip.is_unspecified:
+            raise OneDriveError("Private or local network links are not allowed.")
 
 
 def _filename_from_headers(content_disposition: str | None) -> str | None:

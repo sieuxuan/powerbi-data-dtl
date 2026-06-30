@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from core.onedrive import _filename_from_headers, _to_download_url
+from core.onedrive import OneDriveError, _filename_from_headers, _to_download_url, _validate_download_url
 
 
 class OneDriveTests(unittest.TestCase):
@@ -24,6 +24,10 @@ class OneDriveTests(unittest.TestCase):
     def test_filename_from_headers(self) -> None:
         self.assertEqual(_filename_from_headers('attachment; filename="report.xlsx"'), "report.xlsx")
         self.assertEqual(_filename_from_headers("attachment; filename*=UTF-8''bao_cao.xlsx"), "bao_cao.xlsx")
+
+    def test_download_url_rejects_localhost(self) -> None:
+        with self.assertRaises(OneDriveError):
+            _validate_download_url("http://localhost/report.xlsx")
 
 
 if __name__ == "__main__":

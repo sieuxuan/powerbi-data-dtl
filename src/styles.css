@@ -264,6 +264,20 @@ button:disabled {
   margin: 3px 0;
 }
 
+.sourceFileList .historyItem {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sourceFileList .historyItem > button:first-child {
+  border-color: #d6dedf;
+  background: #fff;
+  color: #172126;
+}
+
+.sourceFileList .historyItem span {
+  color: #697882;
+}
+
 .iconButton {
   border: 1px solid #2c3d43;
   border-radius: 7px;

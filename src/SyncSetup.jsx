@@ -479,7 +479,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   const [error, setError] = useState("");
   const [pendingBundle, setPendingBundle] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
-
   const enabledJobs = useMemo(
     () => (configData?.files || []).filter((file) => file.enabled).length,
     [configData],
@@ -1092,7 +1091,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
             </button>
             <button type="button" className={setupTab === "system" ? "active" : ""} onClick={() => setSetupTab("system")}>
               <Settings2 size={16} aria-hidden="true" />
-              SQL, API, update
+              Hệ thống
             </button>
             <button type="button" className={setupTab === "notify" ? "active" : ""} onClick={() => setSetupTab("notify")}>
               <Bell size={16} aria-hidden="true" />
@@ -1711,33 +1710,9 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
           <section className="setupSection">
             <div className="sectionTitle">
               <Download size={18} aria-hidden="true" />
-              <h3>API & Download</h3>
+              <h3>Thư mục dữ liệu</h3>
             </div>
             <div className="setupGrid">
-              <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.api.enabled)} onChange={(event) => patchSection("api", { enabled: event.target.checked })} />
-                Bật API local
-              </label>
-              <label>
-                API host
-                <input value={configData.api.host || ""} onChange={(event) => patchSection("api", { host: event.target.value })} />
-              </label>
-              <label>
-                API port
-                <input type="number" min="1" value={configData.api.port ?? ""} onChange={(event) => patchSection("api", { port: toNumber(event.target.value, 8765) })} />
-              </label>
-              <label className="wideField">
-                CORS origins
-                <input value={formatList(configData.api.cors_origins)} onChange={(event) => patchSection("api", { cors_origins: parseCsvList(event.target.value) })} />
-              </label>
-              <label>
-                Thư mục download
-                <input value={configData.downloads.dir || ""} onChange={(event) => patchSection("downloads", { dir: event.target.value })} />
-              </label>
-              <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.downloads.keep_files)} onChange={(event) => patchSection("downloads", { keep_files: event.target.checked })} />
-                Giữ file đã tải
-              </label>
               <div className="folderActions wideField">
                 <button type="button" className="secondaryButton" onClick={() => openAppFolder("uploads")}>
                   <FolderOpen size={16} aria-hidden="true" />
@@ -1763,7 +1738,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
             <div className="sectionTitle withAction">
               <div>
                 <RefreshCcw size={18} aria-hidden="true" />
-                <h3>Cập nhật GitHub</h3>
+                <h3>Cập nhật phần mềm</h3>
               </div>
               <button type="button" className="secondaryButton" onClick={() => checkUpdate("check")} disabled={isCheckingUpdate}>
                 <Eye size={16} aria-hidden="true" />
@@ -1781,39 +1756,11 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
             <div className="setupGrid">
               <label className="checkField">
                 <input type="checkbox" checked={Boolean(configData.updates.enabled)} onChange={(event) => patchSection("updates", { enabled: event.target.checked })} />
-                Bật kiểm tra update
-              </label>
-              <label>
-                GitHub repo
-                <input value={configData.updates.repo || ""} placeholder="owner/repo" onChange={(event) => patchSection("updates", { repo: event.target.value })} />
-              </label>
-              <label>
-                Version hiện tại
-                <input value={configData.updates.current_version || ""} placeholder="1.0.0" onChange={(event) => patchSection("updates", { current_version: event.target.value })} />
-              </label>
-              <label>
-                Tên asset portable
-                <input value={configData.updates.asset_pattern || ""} placeholder="PowerBIDataDTL-portable.zip" onChange={(event) => patchSection("updates", { asset_pattern: event.target.value })} />
-              </label>
-              <label>
-                Thư mục update
-                <input value={configData.updates.download_dir || ""} onChange={(event) => patchSection("updates", { download_dir: event.target.value })} />
+                Tự kiểm tra bản mới
               </label>
               <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.updates.check_on_startup)} onChange={(event) => patchSection("updates", { check_on_startup: event.target.checked })} />
-                Kiểm tra khi mở scheduler
-              </label>
-              <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.updates.auto_download)} onChange={(event) => patchSection("updates", { auto_download: event.target.checked })} />
-                Tự tải zip mới
-              </label>
-              <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.updates.auto_apply)} onChange={(event) => patchSection("updates", { auto_apply: event.target.checked })} />
-                Tự cài và mở lại
-              </label>
-              <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.updates.allow_prerelease)} onChange={(event) => patchSection("updates", { allow_prerelease: event.target.checked })} />
-                Nhận pre-release
+                <input type="checkbox" checked={Boolean(configData.updates.auto_apply)} onChange={(event) => patchSection("updates", { auto_apply: event.target.checked, auto_download: event.target.checked })} />
+                Tự cài khi có bản mới
               </label>
             </div>
             {updateInfo && (
@@ -1906,35 +1853,41 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     Webhook URL
                     <input value={configData.notifications.webhook.url || ""} placeholder="https://..." onChange={(event) => patchNested("notifications", "webhook", { url: event.target.value })} />
                   </label>
-                  <label>
-                    Timeout giây
-                    <input type="number" min="1" value={configData.notifications.webhook.timeout_seconds ?? ""} onChange={(event) => patchNested("notifications", "webhook", { timeout_seconds: toNumber(event.target.value, 15) })} />
-                  </label>
-                  <label>
-                    Gửi khi
-                    <select
-                      value={formatList(configData.notifications.webhook.statuses) === "success, failed, mismatch" ? "all" : formatList(configData.notifications.webhook.statuses) === "failed, mismatch" ? "errors" : "custom"}
-                      onChange={(event) => patchNested("notifications", "webhook", {
-                        statuses: event.target.value === "all" ? ["success", "failed", "mismatch"] : event.target.value === "errors" ? ["failed", "mismatch"] : configData.notifications.webhook.statuses,
-                      })}
-                    >
-                      <option value="all">Success / failed / mismatch</option>
-                      <option value="errors">Chỉ failed / mismatch</option>
-                      <option value="custom">Tùy chỉnh status</option>
-                    </select>
-                  </label>
-                  <label className="wideField">
-                    Statuses
-                    <input value={formatList(configData.notifications.webhook.statuses)} placeholder="success, failed, mismatch" onChange={(event) => patchNested("notifications", "webhook", { statuses: parseCsvList(event.target.value) })} />
-                  </label>
                   <button type="button" className="secondaryButton" onClick={testWebhook} disabled={isTestingWebhook}>
                     <Play size={16} aria-hidden="true" />
                     {isTestingWebhook ? "Đang test" : "Test webhook"}
                   </button>
+                  <details className="advancedPanel wideField">
+                    <summary>Nâng cao</summary>
+                    <div className="setupGrid">
+                      <label>
+                        Timeout giây
+                        <input type="number" min="1" value={configData.notifications.webhook.timeout_seconds ?? ""} onChange={(event) => patchNested("notifications", "webhook", { timeout_seconds: toNumber(event.target.value, 15) })} />
+                      </label>
+                      <label>
+                        Gửi khi
+                        <select
+                          value={formatList(configData.notifications.webhook.statuses) === "success, failed, mismatch" ? "all" : formatList(configData.notifications.webhook.statuses) === "failed, mismatch" ? "errors" : "custom"}
+                          onChange={(event) => patchNested("notifications", "webhook", {
+                            statuses: event.target.value === "all" ? ["success", "failed", "mismatch"] : event.target.value === "errors" ? ["failed", "mismatch"] : configData.notifications.webhook.statuses,
+                          })}
+                        >
+                          <option value="all">Thành công và lỗi</option>
+                          <option value="errors">Chỉ lỗi</option>
+                          <option value="custom">Tùy chỉnh</option>
+                        </select>
+                      </label>
+                      <label className="wideField">
+                        Statuses
+                        <input value={formatList(configData.notifications.webhook.statuses)} placeholder="success, failed, mismatch" onChange={(event) => patchNested("notifications", "webhook", { statuses: parseCsvList(event.target.value) })} />
+                      </label>
+                    </div>
+                  </details>
                 </div>
               </div>
 
-              <div className="notificationCard wide">
+              <details className="notificationCard wide advancedPanel">
+                <summary>Email SMTP</summary>
                 <div className="notificationHeader">
                   <div>
                     <strong>Email SMTP</strong>
@@ -1967,7 +1920,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     <input value={formatList(configData.notifications.email.recipients)} placeholder="admin@company.com, bi@company.com" onChange={(event) => patchNested("notifications", "email", { recipients: parseCsvList(event.target.value) })} />
                   </label>
                 </div>
-              </div>
+              </details>
             </div>
           </section>
           )}
@@ -1976,73 +1929,76 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
           <section className="setupSection">
             <div className="sectionTitle">
               <Settings2 size={18} aria-hidden="true" />
-              <h3>Retry & Log</h3>
+              <h3>Nâng cao</h3>
             </div>
-            <div className="setupGrid">
-              {[
-                ["db", "Database"],
-                ["file", "File đọc"],
-                ["onedrive", "SharePoint/OneDrive"],
-              ].map(([key, label]) => (
-                <div className="retryGroup" key={key}>
-                  <strong>{label}</strong>
-                  <label>
-                    Số lần thử
-                    <input type="number" min="1" value={configData.retry[key]?.attempts ?? ""} onChange={(event) => patchRetry(key, { attempts: toNumber(event.target.value, 1) })} />
-                  </label>
-                  <label>
-                    Giây chờ
-                    <input type="number" min="0" value={configData.retry[key]?.delay_seconds ?? ""} onChange={(event) => patchRetry(key, { delay_seconds: toNumber(event.target.value, 0) })} />
-                  </label>
-                </div>
-              ))}
-              <label>
-                Log level
-                <select value={configData.logging.level || "INFO"} onChange={(event) => patchSection("logging", { level: event.target.value })}>
-                  <option>DEBUG</option>
-                  <option>INFO</option>
-                  <option>WARNING</option>
-                  <option>ERROR</option>
-                  <option>CRITICAL</option>
-                </select>
-              </label>
-              <label>
-                Thư mục log
-                <input value={configData.logging.file_dir || ""} onChange={(event) => patchSection("logging", { file_dir: event.target.value })} />
-              </label>
-              <label>
-                MB mỗi file log
-                <input type="number" min="1" value={configData.logging.max_file_size_mb ?? ""} onChange={(event) => patchSection("logging", { max_file_size_mb: toNumber(event.target.value, 10) })} />
-              </label>
-              <label>
-                Số file backup
-                <input type="number" min="0" value={configData.logging.backup_count ?? ""} onChange={(event) => patchSection("logging", { backup_count: toNumber(event.target.value, 30) })} />
-              </label>
-              <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.logging.log_to_db)} onChange={(event) => patchSection("logging", { log_to_db: event.target.checked })} />
-                Lưu log vào PostgreSQL
-              </label>
-              <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.maintenance.enabled)} onChange={(event) => patchSection("maintenance", { enabled: event.target.checked })} />
-                Tự cleanup dữ liệu cũ
-              </label>
-              <label>
-                Giữ sync_log ngày
-                <input type="number" min="1" value={configData.maintenance.sync_log_retention_days ?? ""} onChange={(event) => patchSection("maintenance", { sync_log_retention_days: toNumber(event.target.value, 180) })} />
-              </label>
-              <label>
-                Giữ downloads ngày
-                <input type="number" min="1" value={configData.maintenance.downloads_retention_days ?? ""} onChange={(event) => patchSection("maintenance", { downloads_retention_days: toNumber(event.target.value, 14) })} />
-              </label>
-              <label>
-                Giữ uploads ngày
-                <input type="number" min="1" value={configData.maintenance.uploads_retention_days ?? ""} onChange={(event) => patchSection("maintenance", { uploads_retention_days: toNumber(event.target.value, 365) })} />
-              </label>
-              <label>
-                Giữ preview cache ngày
-                <input type="number" min="1" value={configData.maintenance.preview_cache_retention_days ?? ""} onChange={(event) => patchSection("maintenance", { preview_cache_retention_days: toNumber(event.target.value, 3) })} />
-              </label>
-            </div>
+            <details className="advancedPanel">
+              <summary>Retry, log và dọn dữ liệu cũ</summary>
+              <div className="setupGrid">
+                {[
+                  ["db", "Database"],
+                  ["file", "File đọc"],
+                  ["onedrive", "SharePoint/OneDrive"],
+                ].map(([key, label]) => (
+                  <div className="retryGroup" key={key}>
+                    <strong>{label}</strong>
+                    <label>
+                      Số lần thử
+                      <input type="number" min="1" value={configData.retry[key]?.attempts ?? ""} onChange={(event) => patchRetry(key, { attempts: toNumber(event.target.value, 1) })} />
+                    </label>
+                    <label>
+                      Giây chờ
+                      <input type="number" min="0" value={configData.retry[key]?.delay_seconds ?? ""} onChange={(event) => patchRetry(key, { delay_seconds: toNumber(event.target.value, 0) })} />
+                    </label>
+                  </div>
+                ))}
+                <label>
+                  Log level
+                  <select value={configData.logging.level || "INFO"} onChange={(event) => patchSection("logging", { level: event.target.value })}>
+                    <option>DEBUG</option>
+                    <option>INFO</option>
+                    <option>WARNING</option>
+                    <option>ERROR</option>
+                    <option>CRITICAL</option>
+                  </select>
+                </label>
+                <label>
+                  Thư mục log
+                  <input value={configData.logging.file_dir || ""} onChange={(event) => patchSection("logging", { file_dir: event.target.value })} />
+                </label>
+                <label>
+                  MB mỗi file log
+                  <input type="number" min="1" value={configData.logging.max_file_size_mb ?? ""} onChange={(event) => patchSection("logging", { max_file_size_mb: toNumber(event.target.value, 10) })} />
+                </label>
+                <label>
+                  Số file backup
+                  <input type="number" min="0" value={configData.logging.backup_count ?? ""} onChange={(event) => patchSection("logging", { backup_count: toNumber(event.target.value, 30) })} />
+                </label>
+                <label className="checkField">
+                  <input type="checkbox" checked={Boolean(configData.logging.log_to_db)} onChange={(event) => patchSection("logging", { log_to_db: event.target.checked })} />
+                  Lưu log vào PostgreSQL
+                </label>
+                <label className="checkField">
+                  <input type="checkbox" checked={Boolean(configData.maintenance.enabled)} onChange={(event) => patchSection("maintenance", { enabled: event.target.checked })} />
+                  Tự cleanup dữ liệu cũ
+                </label>
+                <label>
+                  Giữ sync_log ngày
+                  <input type="number" min="1" value={configData.maintenance.sync_log_retention_days ?? ""} onChange={(event) => patchSection("maintenance", { sync_log_retention_days: toNumber(event.target.value, 180) })} />
+                </label>
+                <label>
+                  Giữ downloads ngày
+                  <input type="number" min="1" value={configData.maintenance.downloads_retention_days ?? ""} onChange={(event) => patchSection("maintenance", { downloads_retention_days: toNumber(event.target.value, 14) })} />
+                </label>
+                <label>
+                  Giữ uploads ngày
+                  <input type="number" min="1" value={configData.maintenance.uploads_retention_days ?? ""} onChange={(event) => patchSection("maintenance", { uploads_retention_days: toNumber(event.target.value, 365) })} />
+                </label>
+                <label>
+                  Giữ preview cache ngày
+                  <input type="number" min="1" value={configData.maintenance.preview_cache_retention_days ?? ""} onChange={(event) => patchSection("maintenance", { preview_cache_retention_days: toNumber(event.target.value, 3) })} />
+                </label>
+              </div>
+            </details>
           </section>
           )}
         </div>
