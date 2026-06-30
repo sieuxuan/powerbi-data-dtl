@@ -92,7 +92,7 @@ class WebhookConfig:
     enabled: bool = False
     url: str = ""
     timeout_seconds: float = 15
-    statuses: list[str] = field(default_factory=lambda: ["failed", "mismatch"])
+    statuses: list[str] = field(default_factory=lambda: ["success", "failed", "mismatch"])
 
 
 @dataclass(frozen=True)
@@ -115,6 +115,19 @@ class LoggingConfig:
 class DownloadsConfig:
     dir: str = "./downloads"
     keep_files: bool = False
+
+
+@dataclass(frozen=True)
+class UpdateConfig:
+    enabled: bool = False
+    repo: str = ""
+    current_version: str = "0.0.0"
+    asset_pattern: str = "PowerBIDataDTL-portable.zip"
+    check_on_startup: bool = True
+    auto_download: bool = False
+    auto_apply: bool = False
+    allow_prerelease: bool = False
+    download_dir: str = "./downloads/updates"
 
 
 @dataclass(frozen=True)
@@ -157,6 +170,7 @@ class AppConfig:
     notifications: NotificationConfig
     logging: LoggingConfig
     downloads: DownloadsConfig
+    updates: UpdateConfig
     api: ApiConfig
     retry: RetryConfig
     config_path: Path
@@ -187,6 +201,7 @@ def load_config(path: str | Path) -> AppConfig:
     notifications = _parse_notifications(_optional_mapping(raw, "notifications"))
     logging_config = _parse_logging(_optional_mapping(raw, "logging"))
     downloads = _parse_downloads(_optional_mapping(raw, "downloads"))
+    updates = _parse_updates(_optional_mapping(raw, "updates"))
     api = _parse_api(_optional_mapping(raw, "api"))
     retry = _parse_retry(_optional_mapping(raw, "retry"))
     maintenance = _parse_maintenance(_optional_mapping(raw, "maintenance"))
@@ -198,6 +213,7 @@ def load_config(path: str | Path) -> AppConfig:
         notifications=notifications,
         logging=logging_config,
         downloads=downloads,
+        updates=updates,
         api=api,
         retry=retry,
         maintenance=maintenance,
@@ -403,7 +419,10 @@ def _parse_notifications(raw: dict[str, Any]) -> NotificationConfig:
             enabled=_as_bool(webhook_raw.get("enabled", False)),
             url=str(webhook_raw.get("url", "")).strip(),
             timeout_seconds=float(webhook_raw.get("timeout_seconds", 15)),
-            statuses=_parse_string_list(webhook_raw.get("statuses", ["failed", "mismatch"]), "notifications.webhook.statuses"),
+            statuses=_parse_string_list(
+                webhook_raw.get("statuses", ["success", "failed", "mismatch"]),
+                "notifications.webhook.statuses",
+            ),
         ),
     )
 
@@ -429,6 +448,22 @@ def _parse_downloads(raw: dict[str, Any]) -> DownloadsConfig:
     return DownloadsConfig(
         dir=str(raw.get("dir", "./downloads")),
         keep_files=_as_bool(raw.get("keep_files", False)),
+    )
+
+
+def _parse_updates(raw: dict[str, Any]) -> UpdateConfig:
+    """Parse GitHub release update settings."""
+    return UpdateConfig(
+        enabled=_as_bool(raw.get("enabled", False)),
+        repo=str(raw.get("repo", "")).strip(),
+        current_version=str(raw.get("current_version", "0.0.0")).strip() or "0.0.0",
+        asset_pattern=str(raw.get("asset_pattern", "PowerBIDataDTL-portable.zip")).strip()
+        or "PowerBIDataDTL-portable.zip",
+        check_on_startup=_as_bool(raw.get("check_on_startup", True)),
+        auto_download=_as_bool(raw.get("auto_download", False)),
+        auto_apply=_as_bool(raw.get("auto_apply", False)),
+        allow_prerelease=_as_bool(raw.get("allow_prerelease", False)),
+        download_dir=str(raw.get("download_dir", "./downloads/updates")),
     )
 
 

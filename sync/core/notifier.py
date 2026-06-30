@@ -86,7 +86,16 @@ class Notifier:
         if not webhook.url:
             LOGGER.warning("Webhook notification is enabled but url is empty.")
             return
-        payload = {"type": "sync_result", "result": _result_payload(result)}
+        result_payload = _result_payload(result)
+        payload = {
+            "type": "sync_result",
+            "job": result_payload.get("job") or result_payload.get("name"),
+            "table": result_payload.get("table"),
+            "status": result_payload.get("status"),
+            "rows_imported": result_payload.get("rows_imported", 0),
+            "message": result_payload.get("message"),
+            "result": result_payload,
+        }
         try:
             self.send_webhook_payload(payload)
         except Exception as exc:
@@ -108,8 +117,11 @@ class Notifier:
 def _result_payload(result: object) -> dict[str, Any]:
     """Return a JSON payload for a sync result-like object."""
     if hasattr(result, "to_dict"):
-        return result.to_dict()
+        payload = result.to_dict()
+        payload["job"] = payload.get("name", "")
+        return payload
     return {
+        "job": getattr(result, "name", ""),
         "name": getattr(result, "name", ""),
         "table": getattr(result, "table", ""),
         "status": getattr(result, "status", ""),

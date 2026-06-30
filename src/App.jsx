@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   FolderOpen,
   History,
+  Link2,
   RefreshCcw,
   Save,
   Server,
@@ -530,6 +531,15 @@ function buildSyncCsvFile(project) {
   return new File([blob], `${project.tableName || "sync_import"}.csv`, { type: "text/csv" });
 }
 
+function fileFromBase64(contentBase64, filename, type = "application/octet-stream") {
+  const binary = atob(contentBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new File([bytes], filename || "linked_import.xlsx", { type });
+}
+
 function makeUniqueJobName(files, baseName) {
   const used = new Set((files || []).map((file) => file.name));
   let name = baseName || "Sync import";
@@ -543,10 +553,13 @@ function makeUniqueJobName(files, baseName) {
 
 export default function App() {
   const fileInputRef = useRef(null);
+  const linkInputRef = useRef(null);
   const [project, setProject] = useState(null);
   const [projects, setProjects] = useState([]);
-  const [isDragging, setIsDragging] = useState(false);
   const [message, setMessage] = useState("");
+  const [importSourceMode, setImportSourceMode] = useState("file");
+  const [importLink, setImportLink] = useState("");
+  const [isReadingLink, setIsReadingLink] = useState(false);
   const [activeTab, setActiveTab] = useState("schema");
   const [activeMode, setActiveMode] = useState("builder");
   const [setupNotice, setSetupNotice] = useState("");
@@ -565,19 +578,47 @@ export default function App() {
     setProjects(all);
   }
 
-  async function handleFile(file) {
+  async function loadFileIntoProject(file, metadata = {}) {
     if (!file) return;
     setMessage("Đang đọc file...");
     await allowUiUpdate();
     try {
       const parsed = await readFile(file);
-      const next = buildProject(file.name, parsed);
+      const next = { ...buildProject(file.name, parsed), ...metadata };
       setProject(next);
       setActiveTab("schema");
       setMessage(`Đã đọc ${parsed.rows.length.toLocaleString("vi-VN")} dòng và ${parsed.headers.length} cột.`);
       await refreshProjects();
     } catch (error) {
       setMessage(`Không đọc được file: ${error.message}`);
+    }
+  }
+
+  async function handleFile(file) {
+    await loadFileIntoProject(file);
+  }
+
+  async function handleImportLink(urlOverride = "") {
+    const url = String(urlOverride || importLink).trim();
+    if (!url) return;
+    setIsReadingLink(true);
+    setImportLink(url);
+    setMessage("Đang tải file từ link online...");
+    await allowUiUpdate();
+    try {
+      const result = await syncApi("/api/files/fetch-link", {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      });
+      const file = fileFromBase64(result.content_base64, result.filename);
+      await loadFileIntoProject(file, {
+        sourceLink: url,
+        sourceKind: result.source_kind || "online",
+      });
+    } catch (error) {
+      setMessage(`Không đọc được link: ${error.message}. Link Google Sheet/SharePoint cần được chia sẻ quyền xem hoặc tải xuống.`);
+    } finally {
+      setIsReadingLink(false);
     }
   }
 
@@ -699,34 +740,40 @@ export default function App() {
     setMessage("Đang đưa dữ liệu hiện tại vào Sync...");
     await allowUiUpdate();
     try {
-      const [configResponse, uploadResult] = await Promise.all([
-        syncApi("/api/config"),
-        uploadFileToSync(buildSyncCsvFile(project)),
-      ]);
+      const configResponse = await syncApi("/api/config");
+      const uploadResult = project.sourceLink ? null : await uploadFileToSync(buildSyncCsvFile(project));
       const nextConfig = configResponse.config || {};
       const files = Array.isArray(nextConfig.files) ? [...nextConfig.files] : [];
       files.push({
         name: makeUniqueJobName(files, project.name || project.tableName),
-        source: {
-          type: "local",
-          path: uploadResult.path,
-        },
+        source: project.sourceLink
+          ? {
+            type: "onedrive",
+            share_url: project.sourceLink,
+          }
+          : {
+            type: "local",
+            path: uploadResult.path,
+          },
         target: {
           table: project.tableName || "import_data",
           schema: nextConfig.database?.schema || "public",
           primary_key: [],
         },
         options: {
-          sheet: 0,
-          header_row: 0,
+          sheet: project.sheetName || 0,
+          header_row: project.headerRowIndex || 0,
           skip_rows: [],
           usecols: null,
+          skip_columns: project.sourceLink
+            ? project.columns.filter((column) => !column.include).map((column) => column.sourceName)
+            : [],
           encoding: "utf-8",
           delimiter: ",",
           column_renames: Object.fromEntries(
             project.columns
               .filter((column) => column.include)
-              .map((column) => [column.name, column.name]),
+              .map((column) => [project.sourceLink ? column.sourceName : column.name, column.name]),
           ),
         },
         sync_mode: "truncate_insert",
@@ -790,36 +837,6 @@ export default function App() {
 
         {activeMode === "builder" && (
           <>
-        <button className="uploadButton" type="button" onClick={() => fileInputRef.current?.click()}>
-          <UploadCloud aria-hidden="true" />
-          Chọn file Excel/CSV
-        </button>
-        <input
-          ref={fileInputRef}
-          className="hiddenInput"
-          type="file"
-          accept=".xls,.xlsx,.xlsm,.csv,.tsv,text/csv"
-          onChange={(event) => handleFile(event.target.files?.[0])}
-        />
-
-        <div
-          className={`dropZone ${isDragging ? "dragging" : ""}`}
-          onDragOver={(event) => {
-            event.preventDefault();
-            setIsDragging(true);
-          }}
-          onDragLeave={() => setIsDragging(false)}
-          onDrop={(event) => {
-            event.preventDefault();
-            setIsDragging(false);
-            handleFile(event.dataTransfer.files?.[0]);
-          }}
-        >
-          <FileSpreadsheet aria-hidden="true" />
-          <span>Kéo thả file vào đây</span>
-          <small>.xls, .xlsx, .xlsm, .csv, .tsv</small>
-        </div>
-
         <div className="historyHeader">
           <span><History size={16} aria-hidden="true" /> Đã lưu</span>
           <button type="button" className="iconButton" title="Tải lại danh sách" onClick={refreshProjects}>
@@ -847,15 +864,63 @@ export default function App() {
       </section>
 
       <section className="workspace">
+        {activeMode === "builder" && (
+          <input
+            ref={fileInputRef}
+            className="hiddenInput"
+            type="file"
+            accept=".xls,.xlsx,.xlsm,.csv,.tsv,text/csv"
+            onChange={(event) => handleFile(event.target.files?.[0])}
+          />
+        )}
         {activeMode === "setup" ? (
           <SyncSetup notice={setupNotice} focusJobName={setupFocusJob?.name} focusToken={setupFocusJob?.token} />
         ) : activeMode === "sync" ? (
           <SyncMonitor onEditJob={editSyncJob} />
         ) : !project ? (
           <div className="welcome">
-            <FolderOpen size={46} aria-hidden="true" />
+            <FolderOpen size={42} aria-hidden="true" />
             <h2>Chọn một file để bắt đầu</h2>
             <p>Hệ thống sẽ đọc header, giữ đầy đủ cột, suy luận kiểu dữ liệu và tạo query SQL import có thể chỉnh sửa.</p>
+            <div className="importSourcePanel">
+              <div className="importTwoButtons" role="group" aria-label="Chọn nguồn SQL Import">
+                <button type="button" className={importSourceMode === "file" ? "active" : ""} onClick={() => {
+                  setImportSourceMode("file");
+                  fileInputRef.current?.click();
+                }}>
+                  <UploadCloud size={16} aria-hidden="true" />
+                  File
+                </button>
+                <button type="button" className={importSourceMode === "link" ? "active" : ""} onClick={() => {
+                  setImportSourceMode("link");
+                  if (importLink.trim()) {
+                    handleImportLink();
+                  } else {
+                    setTimeout(() => linkInputRef.current?.focus(), 0);
+                  }
+                }} disabled={isReadingLink}>
+                  <Link2 size={16} aria-hidden="true" />
+                  {isReadingLink ? "Đang đọc" : "Dán link"}
+                </button>
+              </div>
+              {importSourceMode === "link" && (
+                <input
+                  ref={linkInputRef}
+                  className="importLinkInput"
+                  value={importLink}
+                  placeholder="Dán link SharePoint, OneDrive, Google Sheet, Excel Online..."
+                  onChange={(event) => setImportLink(event.target.value)}
+                  onPaste={(event) => {
+                    const pasted = event.clipboardData.getData("text");
+                    if (pasted) setTimeout(() => handleImportLink(pasted), 0);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") handleImportLink();
+                  }}
+                />
+              )}
+              <small>.xls, .xlsx, .xlsm, .csv, .tsv, SharePoint/OneDrive, Google Sheet</small>
+            </div>
           </div>
         ) : (
           <>
@@ -866,6 +931,10 @@ export default function App() {
                 <p className="meta">{project.rows.length.toLocaleString("vi-VN")} dòng, {project.columns.length} cột, {includedColumns.length} cột xuất SQL</p>
               </div>
               <div className="actions">
+                <button type="button" onClick={() => setProject(null)}>
+                  <FolderOpen size={17} aria-hidden="true" />
+                  File/link khác
+                </button>
                 <button type="button" onClick={saveCurrentProject}>
                   <Save size={17} aria-hidden="true" />
                   Lưu

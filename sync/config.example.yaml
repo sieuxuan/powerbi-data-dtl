@@ -18,6 +18,18 @@ downloads:
   dir: "./downloads"
   keep_files: false
 
+# === CAP NHAT PORTABLE TU GITHUB RELEASES ===
+updates:
+  enabled: true
+  repo: "sieuxuan/powerbi-data-dtl"
+  current_version: "1.0.0"
+  asset_pattern: "PowerBIDataDTL-portable.zip"
+  check_on_startup: true
+  auto_download: true
+  auto_apply: true
+  allow_prerelease: false
+  download_dir: "./downloads/updates"
+
 # === API LOCAL CHO DASHBOARD ===
 api:
   enabled: true
@@ -112,6 +124,7 @@ notifications:
     url: ""
     timeout_seconds: 15
     statuses:
+      - "success"
       - "failed"
       - "mismatch"
 

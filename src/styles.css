@@ -113,6 +113,10 @@ button:disabled {
   background: #7bc9b7;
 }
 
+.uploadButton.centered {
+  width: min(320px, 100%);
+}
+
 .hiddenInput {
   display: none;
 }
@@ -139,6 +143,53 @@ button:disabled {
 .emptyText,
 .historyItem small {
   color: #a7b7bb;
+}
+
+.importSourcePanel {
+  width: min(640px, 100%);
+  border: 1px solid #d6dedf;
+  border-radius: 8px;
+  background: #fff;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+}
+
+.importTwoButtons {
+  width: min(420px, 100%);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.importTwoButtons button {
+  border: 1px solid #c8d4d2;
+  border-radius: 7px;
+  min-height: 48px;
+  padding: 0 14px;
+  background: #f7faf9;
+  color: #172126;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 800;
+}
+
+.importTwoButtons button.active {
+  background: #7bc9b7;
+  border-color: #7bc9b7;
+  color: #142027;
+}
+
+.importLinkInput {
+  width: 100%;
+  min-height: 42px;
+}
+
+.importSourcePanel small {
+  color: #687783;
 }
 
 .historyHeader {
@@ -585,6 +636,9 @@ td input[type="checkbox"] {
   padding: 0 12px;
   background: #fff;
   color: #34414c;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -1109,6 +1163,13 @@ td input[type="checkbox"] {
   color: #145244;
 }
 
+.sourceModeButtons.focusMode {
+  border: 1px solid #b6dcd2;
+  border-radius: 8px;
+  background: #f5fbf8;
+  padding: 12px;
+}
+
 .sourceInputRow {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr) 118px 118px;
@@ -1118,6 +1179,36 @@ td input[type="checkbox"] {
 
 .sourceInputRow.linkMode {
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.9fr) 118px 118px;
+}
+
+.sourceInputRow.focusRow {
+  grid-template-columns: 210px minmax(0, 1fr);
+  border: 1px solid #d6e7e2;
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.sourceInputRow.linkMode.focusRow {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.emptyFocus {
+  border: 1px dashed #a8c5bd;
+  border-radius: 8px;
+  background: #f7faf9;
+  min-height: 150px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: #40505a;
+  text-align: center;
+}
+
+.emptyFocus span {
+  color: #687783;
+  font-size: 13px;
 }
 
 .filePickButton {
@@ -1377,6 +1468,7 @@ td input[type="checkbox"] {
 
   .sourceInputRow,
   .sourceInputRow.linkMode,
+  .importLinkRow,
   .columnMappingGrid,
   .columnMappingRow,
   .typePreviewGrid {

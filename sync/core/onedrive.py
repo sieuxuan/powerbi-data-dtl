@@ -68,12 +68,45 @@ def download_onedrive_file(
 
 
 def _to_download_url(url: str) -> str:
-    """Return a best-effort direct download URL for a public OneDrive link."""
+    """Return a best-effort direct download URL for a public online spreadsheet link."""
     parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if host.endswith("docs.google.com") and "/spreadsheets/d/" in parsed.path:
+        parts = [part for part in parsed.path.split("/") if part]
+        sheet_id = parts[parts.index("d") + 1] if "d" in parts and parts.index("d") + 1 < len(parts) else ""
+        if sheet_id:
+            return urlunparse(
+                parsed._replace(
+                    path=f"/spreadsheets/d/{sheet_id}/export",
+                    query=urlencode({"format": "xlsx"}),
+                    fragment="",
+                )
+            )
+    if host.endswith("drive.google.com") and "/file/d/" in parsed.path:
+        parts = [part for part in parsed.path.split("/") if part]
+        file_id = parts[parts.index("d") + 1] if "d" in parts and parts.index("d") + 1 < len(parts) else ""
+        if file_id:
+            return urlunparse(
+                parsed._replace(
+                    path="/uc",
+                    query=urlencode({"export": "download", "id": file_id}),
+                    fragment="",
+                )
+            )
     query = parse_qs(parsed.query)
     if "download" not in query:
         query["download"] = ["1"]
     return urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+
+
+def _source_kind(url: str) -> str:
+    """Return a coarse provider label for an online file URL."""
+    host = urlparse(url).netloc.lower()
+    if "docs.google.com" in host or "drive.google.com" in host:
+        return "google"
+    if "sharepoint.com" in host or "1drv.ms" in host or "onedrive.live.com" in host:
+        return "sharepoint"
+    return "direct"
 
 
 def _filename_from_headers(content_disposition: str | None) -> str | None:

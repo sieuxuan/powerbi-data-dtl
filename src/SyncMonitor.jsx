@@ -143,7 +143,6 @@ export default function SyncMonitor({ onEditJob }) {
     <>
       <header className="topbar">
         <div>
-          <p className="eyebrow">{SYNC_API_URL}</p>
           <h2>Sync Monitor</h2>
           <p className="meta">{jobs.length} job cấu hình, {runningCount} đang chạy, {logs.length} log gần nhất</p>
         </div>
@@ -156,9 +155,9 @@ export default function SyncMonitor({ onEditJob }) {
             <Play size={17} aria-hidden="true" />
             Chạy tất cả
           </button>
-          <button type="button" className="primary" onClick={() => triggerRunAll(true)}>
+          <button type="button" className="primary" title="Chạy lại kể cả khi file chưa thay đổi hash" onClick={() => triggerRunAll(true)}>
             <Play size={17} aria-hidden="true" />
-            Chạy force
+            Chạy lại bỏ qua hash
           </button>
         </div>
       </header>

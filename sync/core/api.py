@@ -17,12 +17,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .config import AppConfig, ConfigError, load_config
+from .config import AppConfig, ConfigError, SourceConfig, load_config
 from .db import PostgresClient, infer_dataframe_schema, validate_upsert_dataframe
 from .file_reader import calculate_md5, read_tabular_file
 from .notifier import Notifier
+from .onedrive import _filename_from_url, _source_kind, download_onedrive_file
 from .schema_compare import compare_columns, normalize_dataframe_columns, normalize_identifier
 from .sync_engine import SyncEngine
+from .updater import UpdateError, apply_update, check_for_update, download_update
 
 
 LOGGER = logging.getLogger(__name__)
@@ -564,9 +566,17 @@ def create_app(config: AppConfig) -> Any:
         runtime_config = load_payload_config(config_payload)
         test_payload = {
             "type": "sync_test",
+            "job": "Webhook test",
+            "table": "public.test_table",
+            "status": "test",
+            "rows_imported": 123,
+            "message": "Webhook test from local Sync API.",
             "result": {
                 "status": "test",
+                "job": "Webhook test",
                 "name": "PowerBI Data DTL",
+                "table": "public.test_table",
+                "rows_imported": 123,
                 "message": "Webhook test from local Sync API.",
                 "sent_at": datetime.now().isoformat(),
             },
@@ -641,6 +651,31 @@ def create_app(config: AppConfig) -> Any:
             "size": len(content),
         }
 
+    @app.post("/api/files/fetch-link")
+    def fetch_link(payload: dict[str, Any]) -> dict[str, Any]:
+        url = str(payload.get("url") or "").strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="url is required")
+        runtime_config = read_runtime_config()
+        source = SourceConfig(type="onedrive", share_url=url)
+        try:
+            result = download_onedrive_file(source, runtime_config.downloads, runtime_config.base_dir, "linked_import")
+            content = result.path.read_bytes()
+            filename = result.path.name or _filename_from_url(url) or "linked_import.xlsx"
+            return {
+                "status": "ok",
+                "filename": filename,
+                "path": str(result.path),
+                "size": len(content),
+                "source_kind": _source_kind(url),
+                "content_base64": base64.b64encode(content).decode("ascii"),
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            if "result" in locals() and result.temporary:
+                result.path.unlink(missing_ok=True)
+
     @app.get("/api/config/export-bundle")
     def export_bundle(include_uploads: bool = True) -> Any:
         path = build_export_bundle(include_uploads)
@@ -682,6 +717,36 @@ def create_app(config: AppConfig) -> Any:
         path = app_folder_path(folder)
         open_folder_in_shell(path)
         return {"status": "ok", "folder": folder, "path": str(path)}
+
+    @app.post("/api/update/check")
+    def update_check(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        config_payload = dict(config_payload_from_request(payload))
+        config_payload["files"] = []
+        runtime_config = load_payload_config(config_payload)
+        try:
+            return check_for_update(runtime_config.updates).to_dict()
+        except UpdateError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/update/download")
+    def update_download(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        config_payload = dict(config_payload_from_request(payload))
+        config_payload["files"] = []
+        runtime_config = load_payload_config(config_payload)
+        try:
+            return download_update(runtime_config.updates, runtime_config.base_dir).to_dict()
+        except UpdateError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/update/apply")
+    def update_apply(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        config_payload = dict(config_payload_from_request(payload))
+        config_payload["files"] = []
+        runtime_config = load_payload_config(config_payload)
+        try:
+            return apply_update(runtime_config.updates, runtime_config.base_dir, restart=True).to_dict()
+        except UpdateError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/jobs")
     def jobs() -> dict[str, Any]:

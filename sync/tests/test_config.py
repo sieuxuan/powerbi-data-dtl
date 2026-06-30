@@ -45,7 +45,34 @@ files: []
             config = load_config(path)
             self.assertEqual(config.api.port, 8765)
             self.assertEqual(config.retry.db.attempts, 3)
+            self.assertFalse(config.updates.enabled)
             self.assertTrue(config.logging.log_to_db)
+
+    def test_updates_are_loaded(self) -> None:
+        config_text = """
+database:
+  host: localhost
+  name: powerbi_data
+  user: postgres
+updates:
+  enabled: true
+  repo: example/powerbi-data-dtl
+  current_version: "1.2.3"
+  asset_pattern: portable.zip
+  auto_download: true
+  auto_apply: true
+files: []
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.yaml"
+            path.write_text(config_text, encoding="utf-8")
+            config = load_config(path)
+            self.assertTrue(config.updates.enabled)
+            self.assertEqual(config.updates.repo, "example/powerbi-data-dtl")
+            self.assertEqual(config.updates.current_version, "1.2.3")
+            self.assertEqual(config.updates.asset_pattern, "portable.zip")
+            self.assertTrue(config.updates.auto_download)
+            self.assertTrue(config.updates.auto_apply)
 
     def test_null_sheet_defaults_to_first_sheet(self) -> None:
         config_text = """
@@ -93,6 +120,7 @@ notifications:
     url: "https://example.test/webhook"
     timeout_seconds: 5
     statuses:
+      - success
       - failed
       - mismatch
 """
@@ -105,7 +133,7 @@ notifications:
             self.assertTrue(config.notifications.webhook.enabled)
             self.assertEqual(config.notifications.webhook.url, "https://example.test/webhook")
             self.assertEqual(config.notifications.webhook.timeout_seconds, 5)
-            self.assertEqual(config.notifications.webhook.statuses, ["failed", "mismatch"])
+            self.assertEqual(config.notifications.webhook.statuses, ["success", "failed", "mismatch"])
 
     def test_multiple_crons_are_loaded(self) -> None:
         config_text = """

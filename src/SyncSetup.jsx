@@ -43,6 +43,17 @@ const DEFAULT_CONFIG = {
     dir: "./downloads",
     keep_files: false,
   },
+  updates: {
+    enabled: false,
+    repo: "",
+    current_version: "0.0.0",
+    asset_pattern: "PowerBIDataDTL-portable.zip",
+    check_on_startup: true,
+    auto_download: false,
+    auto_apply: false,
+    allow_prerelease: false,
+    download_dir: "./downloads/updates",
+  },
   api: {
     enabled: true,
     host: "127.0.0.1",
@@ -76,7 +87,7 @@ const DEFAULT_CONFIG = {
       enabled: false,
       url: "",
       timeout_seconds: 15,
-      statuses: ["failed", "mismatch"],
+      statuses: ["success", "failed", "mismatch"],
     },
   },
   logging: {
@@ -100,6 +111,7 @@ function normalizeConfig(config) {
     database: { ...DEFAULT_CONFIG.database, ...(data.database || {}) },
     schedule: { ...DEFAULT_CONFIG.schedule, ...(data.schedule || {}) },
     downloads: { ...DEFAULT_CONFIG.downloads, ...(data.downloads || {}) },
+    updates: { ...DEFAULT_CONFIG.updates, ...(data.updates || {}) },
     api: { ...DEFAULT_CONFIG.api, ...(data.api || {}) },
     retry: {
       db: { ...DEFAULT_CONFIG.retry.db, ...(data.retry?.db || {}) },
@@ -446,8 +458,11 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   const [isTestingDb, setIsTestingDb] = useState(false);
   const [isTestingWrite, setIsTestingWrite] = useState(false);
   const [isTestingWebhook, setIsTestingWebhook] = useState(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [isDownloadingUpdate, setIsDownloadingUpdate] = useState(false);
+  const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
-  const [setupTab, setSetupTab] = useState("postgres");
+  const [setupTab, setSetupTab] = useState("jobs");
   const [editingJobIndex, setEditingJobIndex] = useState(-1);
   const [uploadingJobIndex, setUploadingJobIndex] = useState(null);
   const [testingFileIndex, setTestingFileIndex] = useState(null);
@@ -458,12 +473,12 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   const [wizardJob, setWizardJob] = useState(null);
   const [wizardPreview, setWizardPreview] = useState(null);
   const [wizardMessage, setWizardMessage] = useState("");
-  const [wizardChecks, setWizardChecks] = useState({ db: false, preview: false, dryRun: false });
   const [wizardDryRun, setWizardDryRun] = useState(null);
   const [isWizardBusy, setIsWizardBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [pendingBundle, setPendingBundle] = useState(null);
+  const [updateInfo, setUpdateInfo] = useState(null);
 
   const enabledJobs = useMemo(
     () => (configData?.files || []).filter((file) => file.enabled).length,
@@ -540,7 +555,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
         body: JSON.stringify({ config: configData }),
       });
       setMessage(result.message || "Kết nối PostgreSQL thành công.");
-      setWizardChecks((current) => ({ ...current, db: true }));
     } catch (testError) {
       setError(`Test database lỗi: ${testError.message}`);
     } finally {
@@ -652,6 +666,32 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
       setError(`Test webhook lỗi: ${testError.message}`);
     } finally {
       setIsTestingWebhook(false);
+    }
+  }
+
+  async function checkUpdate(action = "check") {
+    if (!configData) return;
+    const setBusy = action === "apply" ? setIsApplyingUpdate : action === "download" ? setIsDownloadingUpdate : setIsCheckingUpdate;
+    setBusy(true);
+    setError("");
+    try {
+      const endpoint = action === "apply" ? "/api/update/apply" : action === "download" ? "/api/update/download" : "/api/update/check";
+      const result = await syncApi(endpoint, {
+        method: "POST",
+        body: JSON.stringify({ config: configData }),
+      });
+      setUpdateInfo(result);
+      if (action === "apply") {
+        setMessage(result.message || "Đang áp dụng bản cập nhật. Ứng dụng sẽ tự mở lại.");
+      } else if (action === "download") {
+        setMessage(result.downloaded_path ? `Đã tải bản cập nhật vào ${result.downloaded_path}.` : "Không có bản mới để tải.");
+      } else {
+        setMessage(result.update_available ? `Có bản mới ${result.latest_version}.` : "Đang dùng bản mới nhất theo cấu hình GitHub.");
+      }
+    } catch (updateError) {
+      setError(`Kiểm tra cập nhật lỗi: ${updateError.message}`);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -786,7 +826,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
     setWizardJob(defaultNewJob(files.length, configData?.database?.schema));
     setWizardPreview(null);
     setWizardMessage("");
-    setWizardChecks({ db: false, preview: false, dryRun: false });
     setWizardDryRun(null);
     setWizardStep(1);
     setWizardOpen(true);
@@ -911,7 +950,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
         body: JSON.stringify({ config: configData, file: wizardJob }),
       });
       setWizardPreview(result);
-      setWizardChecks((current) => ({ ...current, preview: true }));
       const firstSheet = result.sheets?.[0];
       if (firstSheet) {
         const headerRow = Math.max(0, Number(firstSheet.suggested_header_row || 1) - 1);
@@ -957,7 +995,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
         body: JSON.stringify({ config: configData, file: wizardJob }),
       });
       setWizardDryRun(result);
-      setWizardChecks((current) => ({ ...current, dryRun: true }));
       setWizardMessage(`${result.sampled ? `Mẫu ${result.rows} dòng` : `${result.rows} dòng`}, ${result.columns?.length || 0} cột. Schema ${result.schema_match ? "khớp" : result.table_exists ? "chưa khớp" : "sẽ tạo mới"}.`);
     } catch (dryRunError) {
       setWizardMessage(`Dry run lỗi: ${dryRunError.message}`);
@@ -1018,20 +1055,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
             <RefreshCcw size={17} aria-hidden="true" />
             Tải lại
           </button>
-          <button type="button" onClick={exportBundle}>
-            <Archive size={17} aria-hidden="true" />
-            Export bundle
-          </button>
-          <label className={`actionFileButton ${isImportingBundle ? "disabled" : ""}`}>
-            <UploadCloud size={17} aria-hidden="true" />
-            {isImportingBundle ? "Đang import" : "Import bundle"}
-            <input
-              type="file"
-              accept=".zip,application/zip"
-              disabled={isImportingBundle}
-              onChange={(event) => importBundle(event.target.files?.[0])}
-            />
-          </label>
           <button type="button" className="primary" onClick={saveConfig} disabled={!configData || isSaving}>
             <Save size={17} aria-hidden="true" />
             {isSaving ? "Đang lưu" : "Lưu cấu hình"}
@@ -1062,12 +1085,27 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
 
       {configData && (
         <div className="setupLayout">
-          {wizardOpen && wizardJob && (
+          <nav className="setupTabs" aria-label="Nhóm cấu hình sync">
+            <button type="button" className={setupTab === "jobs" ? "active" : ""} onClick={() => setSetupTab("jobs")}>
+              <Link2 size={16} aria-hidden="true" />
+              Jobs & wizard
+            </button>
+            <button type="button" className={setupTab === "system" ? "active" : ""} onClick={() => setSetupTab("system")}>
+              <Settings2 size={16} aria-hidden="true" />
+              SQL, API, update
+            </button>
+            <button type="button" className={setupTab === "notify" ? "active" : ""} onClick={() => setSetupTab("notify")}>
+              <Bell size={16} aria-hidden="true" />
+              Thông báo
+            </button>
+          </nav>
+
+          {setupTab === "jobs" && wizardOpen && wizardJob && (
             <section className="setupSection wizardPanel">
               <div className="wizardHeader">
                 <div>
                   <p className="eyebrow">Wizard thêm job</p>
-                  <h3>PostgreSQL → File/link → Mapping bảng</h3>
+                  <h3>File/link → Preview → Mapping bảng</h3>
                 </div>
                 <button type="button" className="secondaryButton" onClick={() => setWizardOpen(false)}>
                   Đóng
@@ -1083,68 +1121,17 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     onClick={() => setWizardStep(step)}
                   >
                     <span>{step}</span>
-                    {step === 1 && "PostgreSQL"}
-                    {step === 2 && "File/link"}
+                    {step === 1 && "File/link"}
+                    {step === 2 && "Preview"}
                     {step === 3 && "Mapping"}
                   </button>
                 ))}
               </div>
-              <div className="wizardChecks">
-                <span className={wizardChecks.db ? "done" : ""}>Test DB</span>
-                <span className={wizardChecks.preview ? "done" : ""}>Preview file</span>
-                <span className={wizardChecks.dryRun ? "done" : ""}>Dry run</span>
-              </div>
-
               {wizardMessage && <div className="testResult info">{wizardMessage}</div>}
 
               {wizardStep === 1 && (
                 <div className="wizardBody">
-                  <div className="setupGrid">
-                    <label>
-                      Host
-                      <input value={configData.database.host || ""} onChange={(event) => patchSection("database", { host: event.target.value })} />
-                    </label>
-                    <label>
-                      Port
-                      <input type="number" min="1" value={configData.database.port ?? ""} onChange={(event) => patchSection("database", { port: toNumber(event.target.value, 5432) })} />
-                    </label>
-                    <label>
-                      Database
-                      <input value={configData.database.name || ""} onChange={(event) => patchSection("database", { name: event.target.value })} />
-                    </label>
-                    <label>
-                      User
-                      <input value={configData.database.user || ""} onChange={(event) => patchSection("database", { user: event.target.value })} />
-                    </label>
-                    <label>
-                      Password
-                      <input type="password" value={configData.database.password || ""} onChange={(event) => patchSection("database", { password: event.target.value })} />
-                    </label>
-                    <label>
-                      Schema
-                      <input value={configData.database.schema || ""} onChange={(event) => patchSection("database", { schema: event.target.value })} />
-                    </label>
-                  </div>
-                  <div className="wizardActions">
-                    <button type="button" className="secondaryButton" onClick={testDatabase} disabled={isTestingDb}>
-                      <Play size={16} aria-hidden="true" />
-                      Test kết nối
-                    </button>
-                    <button type="button" className="secondaryButton" onClick={() => testWritePermission()} disabled={isTestingWrite}>
-                      <Play size={16} aria-hidden="true" />
-                      Test quyền ghi
-                    </button>
-                    <button type="button" className="primary" onClick={() => setWizardStep(2)}>
-                      Tiếp
-                      <ChevronRight size={16} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {wizardStep === 2 && (
-                <div className="wizardBody">
-                  <div className="sourceModeButtons" role="group" aria-label="Chọn nguồn file wizard">
+                  <div className="sourceModeButtons focusMode" role="group" aria-label="Chọn nguồn file wizard">
                     <button type="button" className={wizardJob.source?.type !== "onedrive" ? "active" : ""} onClick={() => changeWizardSourceType("local")}>
                       <UploadCloud size={16} aria-hidden="true" />
                       Upload file local
@@ -1156,22 +1143,18 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                   </div>
 
                   {wizardJob.source?.type === "onedrive" ? (
-                    <div className="sourceInputRow linkMode">
+                    <div className="sourceInputRow linkMode focusRow">
                       <label>
                         Link share
-                        <input value={wizardJob.source?.share_url || ""} onChange={(event) => patchWizardNested("source", { share_url: event.target.value })} />
+                        <input value={wizardJob.source?.share_url || ""} placeholder="https://...sharepoint.com/..." onChange={(event) => patchWizardNested("source", { share_url: event.target.value })} />
                       </label>
                       <label>
                         Direct download URL
-                        <input value={wizardJob.source?.download_url || ""} onChange={(event) => patchWizardNested("source", { download_url: event.target.value })} />
+                        <input value={wizardJob.source?.download_url || ""} placeholder="Tuỳ chọn nếu đã có link tải trực tiếp" onChange={(event) => patchWizardNested("source", { download_url: event.target.value })} />
                       </label>
-                      <button type="button" className="secondaryButton" onClick={previewWizardFile} disabled={isWizardBusy}>
-                        <Eye size={16} aria-hidden="true" />
-                        Preview
-                      </button>
                     </div>
                   ) : (
-                    <div className="sourceInputRow">
+                    <div className="sourceInputRow focusRow">
                       <label className="filePickButton">
                         <FileSpreadsheet size={17} aria-hidden="true" />
                         Chọn file
@@ -1179,11 +1162,34 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       </label>
                       <label>
                         Đường dẫn file
-                        <input value={wizardJob.source?.path || ""} onChange={(event) => patchWizardNested("source", { path: event.target.value })} />
+                        <input value={wizardJob.source?.path || ""} placeholder="./uploads/report.xlsx hoặc D:/Data/report.xlsx" onChange={(event) => patchWizardNested("source", { path: event.target.value })} />
                       </label>
+                    </div>
+                  )}
+
+                  <div className="wizardActions">
+                    <button type="button" className="secondaryButton" onClick={previewWizardFile} disabled={isWizardBusy}>
+                      <Eye size={16} aria-hidden="true" />
+                      {isWizardBusy ? "Đang preview" : "Preview file"}
+                    </button>
+                    <button type="button" className="primary" onClick={() => setWizardStep(2)} disabled={!wizardPreview}>
+                      Tiếp
+                      <ChevronRight size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {wizardStep === 2 && (
+                <div className="wizardBody">
+                  {!wizardPreview?.sheets?.length && (
+                    <div className="emptyFocus">
+                      <FileSpreadsheet size={24} aria-hidden="true" />
+                      <strong>Chưa có preview</strong>
+                      <span>Quay lại bước File/link để chọn file, hoặc bấm đọc lại nếu file vừa thay đổi.</span>
                       <button type="button" className="secondaryButton" onClick={previewWizardFile} disabled={isWizardBusy}>
                         <Eye size={16} aria-hidden="true" />
-                        Preview
+                        {isWizardBusy ? "Đang preview" : "Đọc preview"}
                       </button>
                     </div>
                   )}
@@ -1217,6 +1223,26 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                             onChange={(event) => patchWizardPreviewOptions({ header_row: Math.max(0, Number(event.target.value || 1) - 1) })}
                           />
                         </label>
+                        <label>
+                          Bỏ qua dòng
+                          <input value={formatList(wizardJob.options?.skip_rows)} placeholder="0, 1, 2" onChange={(event) => patchWizardNested("options", { skip_rows: parseNumberList(event.target.value) })} />
+                        </label>
+                        <label>
+                          Cột đọc
+                          <input value={wizardJob.options?.usecols || ""} placeholder="A:K hoặc cột1,cột2" onChange={(event) => patchWizardNested("options", { usecols: event.target.value || null })} />
+                        </label>
+                        <label>
+                          Bỏ cột sau header
+                          <input value={formatList(wizardJob.options?.skip_columns)} placeholder="buyer.1, note" onChange={(event) => patchWizardNested("options", { skip_columns: parseCsvList(event.target.value) })} />
+                        </label>
+                        <label>
+                          Encoding CSV
+                          <input value={wizardJob.options?.encoding || ""} onChange={(event) => patchWizardNested("options", { encoding: event.target.value })} />
+                        </label>
+                        <label>
+                          Delimiter CSV
+                          <input value={wizardJob.options?.delimiter || ""} onChange={(event) => patchWizardNested("options", { delimiter: event.target.value })} />
+                        </label>
                       </div>
                       <div className="previewTableWrap">
                         <table>
@@ -1238,7 +1264,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       <ChevronLeft size={16} aria-hidden="true" />
                       Quay lại
                     </button>
-                    <button type="button" className="primary" onClick={() => setWizardStep(3)}>
+                    <button type="button" className="primary" onClick={() => setWizardStep(3)} disabled={!wizardPreview?.sheets?.length}>
                       Tiếp
                       <ChevronRight size={16} aria-hidden="true" />
                     </button>
@@ -1351,6 +1377,8 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
             </section>
           )}
 
+          {setupTab === "system" && (
+          <>
           <section className="setupSection">
             <div className="sectionTitle withAction">
               <div>
@@ -1397,7 +1425,11 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
               </label>
             </div>
           </section>
+          </>
+          )}
 
+          {setupTab === "jobs" && (
+          <>
           <section className="setupSection">
             <div className="sectionTitle">
               <Clock3 size={18} aria-hidden="true" />
@@ -1671,7 +1703,11 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
               );
             })}
           </section>
+          </>
+          )}
 
+          {setupTab === "system" && (
+          <>
           <section className="setupSection">
             <div className="sectionTitle">
               <Download size={18} aria-hidden="true" />
@@ -1724,6 +1760,72 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
           </section>
 
           <section className="setupSection">
+            <div className="sectionTitle withAction">
+              <div>
+                <RefreshCcw size={18} aria-hidden="true" />
+                <h3>Cập nhật GitHub</h3>
+              </div>
+              <button type="button" className="secondaryButton" onClick={() => checkUpdate("check")} disabled={isCheckingUpdate}>
+                <Eye size={16} aria-hidden="true" />
+                {isCheckingUpdate ? "Đang kiểm tra" : "Kiểm tra"}
+              </button>
+              <button type="button" className="secondaryButton" onClick={() => checkUpdate("download")} disabled={isDownloadingUpdate}>
+                <Download size={16} aria-hidden="true" />
+                {isDownloadingUpdate ? "Đang tải" : "Tải bản mới"}
+              </button>
+              <button type="button" className="secondaryButton" onClick={() => checkUpdate("apply")} disabled={isApplyingUpdate}>
+                <RefreshCcw size={16} aria-hidden="true" />
+                {isApplyingUpdate ? "Đang cập nhật" : "Cập nhật & mở lại"}
+              </button>
+            </div>
+            <div className="setupGrid">
+              <label className="checkField">
+                <input type="checkbox" checked={Boolean(configData.updates.enabled)} onChange={(event) => patchSection("updates", { enabled: event.target.checked })} />
+                Bật kiểm tra update
+              </label>
+              <label>
+                GitHub repo
+                <input value={configData.updates.repo || ""} placeholder="owner/repo" onChange={(event) => patchSection("updates", { repo: event.target.value })} />
+              </label>
+              <label>
+                Version hiện tại
+                <input value={configData.updates.current_version || ""} placeholder="1.0.0" onChange={(event) => patchSection("updates", { current_version: event.target.value })} />
+              </label>
+              <label>
+                Tên asset portable
+                <input value={configData.updates.asset_pattern || ""} placeholder="PowerBIDataDTL-portable.zip" onChange={(event) => patchSection("updates", { asset_pattern: event.target.value })} />
+              </label>
+              <label>
+                Thư mục update
+                <input value={configData.updates.download_dir || ""} onChange={(event) => patchSection("updates", { download_dir: event.target.value })} />
+              </label>
+              <label className="checkField">
+                <input type="checkbox" checked={Boolean(configData.updates.check_on_startup)} onChange={(event) => patchSection("updates", { check_on_startup: event.target.checked })} />
+                Kiểm tra khi mở scheduler
+              </label>
+              <label className="checkField">
+                <input type="checkbox" checked={Boolean(configData.updates.auto_download)} onChange={(event) => patchSection("updates", { auto_download: event.target.checked })} />
+                Tự tải zip mới
+              </label>
+              <label className="checkField">
+                <input type="checkbox" checked={Boolean(configData.updates.auto_apply)} onChange={(event) => patchSection("updates", { auto_apply: event.target.checked })} />
+                Tự cài và mở lại
+              </label>
+              <label className="checkField">
+                <input type="checkbox" checked={Boolean(configData.updates.allow_prerelease)} onChange={(event) => patchSection("updates", { allow_prerelease: event.target.checked })} />
+                Nhận pre-release
+              </label>
+            </div>
+            {updateInfo && (
+              <div className={`testResult ${updateInfo.update_available ? "info" : "success"}`}>
+                <strong>{updateInfo.update_available ? `Có bản ${updateInfo.latest_version}` : `Đang ở bản ${updateInfo.current_version}`}</strong>
+                {updateInfo.release_url && <span> · {updateInfo.release_url}</span>}
+                {updateInfo.downloaded_path && <span> · Đã tải: {updateInfo.downloaded_path}</span>}
+              </div>
+            )}
+          </section>
+
+          <section className="setupSection">
             <div className="sectionTitle">
               <Archive size={18} aria-hidden="true" />
               <h3>Backup & Restore</h3>
@@ -1767,7 +1869,10 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
               </div>
             )}
           </section>
+          </>
+          )}
 
+          {setupTab === "notify" && (
           <section className="setupSection">
             <div className="sectionTitle">
               <Bell size={18} aria-hidden="true" />
@@ -1808,18 +1913,19 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                   <label>
                     Gửi khi
                     <select
-                      value={formatList(configData.notifications.webhook.statuses) === "failed, mismatch" ? "errors" : "custom"}
+                      value={formatList(configData.notifications.webhook.statuses) === "success, failed, mismatch" ? "all" : formatList(configData.notifications.webhook.statuses) === "failed, mismatch" ? "errors" : "custom"}
                       onChange={(event) => patchNested("notifications", "webhook", {
-                        statuses: event.target.value === "errors" ? ["failed", "mismatch"] : configData.notifications.webhook.statuses,
+                        statuses: event.target.value === "all" ? ["success", "failed", "mismatch"] : event.target.value === "errors" ? ["failed", "mismatch"] : configData.notifications.webhook.statuses,
                       })}
                     >
+                      <option value="all">Success / failed / mismatch</option>
                       <option value="errors">Chỉ failed / mismatch</option>
                       <option value="custom">Tùy chỉnh status</option>
                     </select>
                   </label>
                   <label className="wideField">
                     Statuses
-                    <input value={formatList(configData.notifications.webhook.statuses)} placeholder="failed, mismatch" onChange={(event) => patchNested("notifications", "webhook", { statuses: parseCsvList(event.target.value) })} />
+                    <input value={formatList(configData.notifications.webhook.statuses)} placeholder="success, failed, mismatch" onChange={(event) => patchNested("notifications", "webhook", { statuses: parseCsvList(event.target.value) })} />
                   </label>
                   <button type="button" className="secondaryButton" onClick={testWebhook} disabled={isTestingWebhook}>
                     <Play size={16} aria-hidden="true" />
@@ -1864,7 +1970,9 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
               </div>
             </div>
           </section>
+          )}
 
+          {setupTab === "system" && (
           <section className="setupSection">
             <div className="sectionTitle">
               <Settings2 size={18} aria-hidden="true" />
@@ -1936,6 +2044,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
               </label>
             </div>
           </section>
+          )}
         </div>
       )}
     </>

@@ -10,6 +10,7 @@ yarn-error.log*
 .env
 .env.local
 sync/config.yaml
+sync/config.yaml.bak
 sync/logs/*.log
 sync/downloads/*
 sync/uploads/*

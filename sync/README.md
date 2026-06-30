@@ -81,7 +81,11 @@ Endpoints:
 - `POST /api/config/test-webhook`
 - `POST /api/config/import-bundle`
 - `POST /api/config/preview-bundle`
+- `POST /api/files/fetch-link`
 - `POST /api/open-folder`
+- `POST /api/update/check`
+- `POST /api/update/download`
+- `POST /api/update/apply`
 - `POST /api/jobs/{name}/run?force=false`
 - `POST /api/run-all?force=false`
 
@@ -94,8 +98,10 @@ Frontend Vite doc API URL tu `VITE_SYNC_API_URL`, fallback `http://127.0.0.1:876
 - Khi chay bang `python main.py start` hoac `run-portable.bat`, runtime tu reload scheduler khi `sync/config.yaml` thay doi nen khong can restart de ap dung cron moi.
 - Ghi `sync_log` vao PostgreSQL va dung hash de skip file khong doi.
 - Ho tro `truncate_insert`, `drop_recreate`, `append`, `upsert`.
-- Gui Windows toast, email summary va webhook neu bat trong config. Webhook mac dinh chi gui `failed` va `mismatch`.
+- Gui Windows toast, email summary va webhook neu bat trong config. Webhook mac dinh gui `success`, `failed` va `mismatch`.
 - Dry run doc file, infer PostgreSQL type, so schema va test quyen ghi nhung khong import du lieu.
 - API cache preview SharePoint trong `.preview_cache`, tra progress job cho dashboard va dung PostgreSQL connection pool trong tien trinh chay nen.
+- Link online ho tro SharePoint/OneDrive, Google Sheets public/export, Google Drive file/direct download bang backend de tranh CORS.
 - `maintenance` cau hinh retention cho `sync_log`, `downloads`, `uploads`, `.preview_cache`.
+- `updates` kiem tra GitHub Releases khi scheduler khoi dong; neu `auto_download=true` thi tai asset portable moi hon `current_version`; neu `auto_apply=true` trong portable thi giai nen, copy file moi va mo lai app, giu nguyen `sync/config.yaml`, `sync/.env`, logs/uploads/downloads.
 - Windows Service mac dinh: `PowerBIDataDTLSync`.

@@ -12,6 +12,14 @@ class OneDriveTests(unittest.TestCase):
             _to_download_url("https://example.com/file.xlsx?x=1"),
             "https://example.com/file.xlsx?x=1&download=1",
         )
+        self.assertEqual(
+            _to_download_url("https://docs.google.com/spreadsheets/d/abc123/edit#gid=0"),
+            "https://docs.google.com/spreadsheets/d/abc123/export?format=xlsx",
+        )
+        self.assertEqual(
+            _to_download_url("https://drive.google.com/file/d/file123/view?usp=sharing"),
+            "https://drive.google.com/uc?export=download&id=file123",
+        )
 
     def test_filename_from_headers(self) -> None:
         self.assertEqual(_filename_from_headers('attachment; filename="report.xlsx"'), "report.xlsx")

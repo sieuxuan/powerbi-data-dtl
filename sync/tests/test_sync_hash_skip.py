@@ -18,6 +18,7 @@ from core.config import (
     SourceConfig,
     SyncFileConfig,
     TargetConfig,
+    UpdateConfig,
 )
 from core.file_reader import calculate_md5
 from core.sync_engine import SyncEngine
@@ -72,6 +73,7 @@ class SyncHashSkipTests(unittest.TestCase):
                 notifications=NotificationConfig(),
                 logging=LoggingConfig(),
                 downloads=DownloadsConfig(),
+                updates=UpdateConfig(),
                 api=ApiConfig(enabled=False),
                 retry=RetryConfig(
                     db=RetryPolicy(attempts=1, delay_seconds=0),
@@ -109,6 +111,7 @@ class SyncHashSkipTests(unittest.TestCase):
                 notifications=NotificationConfig(),
                 logging=LoggingConfig(log_to_db=False),
                 downloads=DownloadsConfig(),
+                updates=UpdateConfig(),
                 api=ApiConfig(enabled=False),
                 retry=RetryConfig(
                     db=RetryPolicy(attempts=1, delay_seconds=0),

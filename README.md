@@ -82,16 +82,17 @@ Nếu UI báo `Failed to fetch` hoặc `Không tải được cấu hình`, Sync
 - Lưu dự án vào IndexedDB của trình duyệt và mở lại từ danh sách đã lưu.
 - Copy SQL hoặc tải file `.sql`.
 - Đọc trực tiếp file Excel cũ `.xls` bằng parser legacy, không cần convert trước.
-- Nút `Đưa vào Sync` tạo file CSV đã chuẩn hóa theo schema hiện tại, upload vào `sync/uploads`, rồi thêm job sync tương ứng vào `sync/config.yaml`.
+- `SQL Import` có 2 cửa vào chính: chọn file local hoặc dán link SharePoint/OneDrive/Google Sheet/Excel online; link được backend tải về để tránh CORS.
+- Nút `Đưa vào Sync` thêm job sync tương ứng vào `sync/config.yaml`; nếu nguồn là link online thì giữ link để lần sau tải lại dữ liệu mới, nếu nguồn là file local thì tạo CSV chuẩn hóa trong `sync/uploads`.
 
 ## Cấu hình Sync trong app
 
-- `PostgreSQL`: nhập host, port, database, user, password/schema và bấm `Test kết nối`.
-- Màn `Cấu hình Sync` được chia tab: `PostgreSQL`, `Jobs`, `Thông báo`, `Backup`.
+- Màn `Cấu hình Sync` được chia tab: `Jobs & wizard`, `SQL, API, update`, `Thông báo`.
+- `SQL, API, update`: nhập PostgreSQL, test kết nối/quyền ghi, cấu hình API local, download, GitHub update, backup/restore, retry/log.
 - Bấm `Test quyền ghi` để kiểm tra user có tạo/insert/drop bảng test trong schema đích được không.
 - `Lịch chạy`: chọn giờ chạy hằng ngày, mỗi giờ, hoặc nhập cron tùy chỉnh.
-- `Thêm job` mở wizard 3 bước: PostgreSQL -> File/link -> Mapping bảng.
-- Wizard có checklist `Test DB`, `Preview file`, `Dry run`; `Preview` dùng cache cho link SharePoint để đổi sheet/header không tải lại link nhiều lần.
+- `Thêm job` mở wizard 3 bước: File/link -> Preview -> Mapping bảng; wizard không bắt setup lại SQL.
+- Wizard có checklist `Preview file`, `Dry run`; `Preview` dùng cache cho link SharePoint để đổi sheet/header không tải lại link nhiều lần.
 - Trong bước `Mapping`, có thể đổi tên cột từ preview trước khi import; mapping này cũng dùng được cho link SharePoint/OneDrive.
 - `File Sync Jobs`: chọn `Upload file local` để đưa file vào `sync/uploads`, hoặc `Dán link SharePoint` để dùng link SharePoint/OneDrive public/direct download.
 - Sửa job mở dạng drawer bên phải để danh sách job không bị kéo dài.
@@ -99,11 +100,12 @@ Nếu UI báo `Failed to fetch` hoặc `Không tải được cấu hình`, Sync
 - `Dòng header Excel` dùng số dòng dễ hiểu: `1` là dòng đầu tiên, `5` là dòng thứ 5.
 - `API & Download` có nút mở nhanh thư mục `uploads`, `downloads`, `logs`, `exports`.
 - `Thông báo` hỗ trợ Windows toast, email và webhook POST JSON. Webhook mặc định tắt; chỉ cần bật và dán URL khi có endpoint.
-- Có nút `Test webhook`; webhook mặc định chỉ gửi khi job `failed` hoặc `mismatch` để tránh spam.
+- Có nút `Test webhook`; webhook mặc định gửi `success`, `failed`, `mismatch`.
 - Nếu chọn `upsert`, điền `Primary key` rõ ràng, ví dụ `id` hoặc `id, branch_code`.
 - Nút `Dry run` đọc file/link, preview kiểu dữ liệu PostgreSQL, so schema và test quyền ghi nhưng không import dữ liệu.
 - `Backup & Restore` cho export/import bundle zip gồm `sync/config.yaml`, `sync/.env` và `sync/uploads` để chuyển máy/backup.
 - `Retry & Log` có retention cleanup cho `sync_log`, `downloads`, `uploads`, `.preview_cache`.
+- `Cập nhật GitHub` kiểm tra GitHub Releases của `sieuxuan/powerbi-data-dtl`; portable có thể tự tải, giải nén, copy file mới và mở lại app, đồng thời giữ nguyên `sync/config.yaml`, `sync/.env`, logs/uploads/downloads.
 
 ## Tính năng Sync Monitor
 

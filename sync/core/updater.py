@@ -1,0 +1,337 @@
+"""Check and download portable updates from GitHub Releases."""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+import shutil
+import subprocess
+import threading
+import time
+import zipfile
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from .config import UpdateConfig
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+class UpdateError(RuntimeError):
+    """Raised when update metadata or assets cannot be fetched."""
+
+
+@dataclass(frozen=True)
+class UpdateInfo:
+    """Result of a GitHub release update check."""
+
+    configured: bool
+    update_available: bool
+    current_version: str
+    latest_version: str | None = None
+    release_url: str | None = None
+    asset_name: str | None = None
+    asset_url: str | None = None
+    downloaded_path: str | None = None
+    extracted_path: str | None = None
+    apply_script: str | None = None
+    message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly payload."""
+        return {
+            "configured": self.configured,
+            "update_available": self.update_available,
+            "current_version": self.current_version,
+            "latest_version": self.latest_version,
+            "release_url": self.release_url,
+            "asset_name": self.asset_name,
+            "asset_url": self.asset_url,
+            "downloaded_path": self.downloaded_path,
+            "extracted_path": self.extracted_path,
+            "apply_script": self.apply_script,
+            "message": self.message,
+        }
+
+
+def check_for_update(config: UpdateConfig) -> UpdateInfo:
+    """Check GitHub Releases and return latest matching asset metadata."""
+    if not config.enabled or not config.repo:
+        return UpdateInfo(
+            configured=False,
+            update_available=False,
+            current_version=config.current_version,
+            message="Update check is disabled or GitHub repo is empty.",
+        )
+
+    release = _fetch_latest_release(config)
+    latest_version = _normalize_version(str(release.get("tag_name") or release.get("name") or ""))
+    if not latest_version:
+        raise UpdateError("Latest GitHub release has no tag_name.")
+    asset = _find_asset(release.get("assets", []), config.asset_pattern)
+    update_available = _version_tuple(latest_version) > _version_tuple(config.current_version)
+    return UpdateInfo(
+        configured=True,
+        update_available=update_available,
+        current_version=config.current_version,
+        latest_version=latest_version,
+        release_url=release.get("html_url"),
+        asset_name=asset.get("name") if asset else None,
+        asset_url=asset.get("browser_download_url") if asset else None,
+        message="Update available." if update_available else "Already up to date.",
+    )
+
+
+def download_update(config: UpdateConfig, base_dir: Path) -> UpdateInfo:
+    """Download the latest matching GitHub release asset."""
+    info = check_for_update(config)
+    if not info.update_available:
+        return info
+    if not info.asset_url or not info.asset_name:
+        raise UpdateError("No matching release asset was found.")
+
+    try:
+        import httpx
+    except ImportError as exc:
+        raise UpdateError("httpx is required. Install dependencies with: pip install -r requirements.txt") from exc
+
+    download_dir = Path(config.download_dir)
+    if not download_dir.is_absolute():
+        download_dir = base_dir / download_dir
+    download_dir.mkdir(parents=True, exist_ok=True)
+    target_path = _unique_path(download_dir / _safe_filename(info.asset_name))
+
+    with httpx.stream("GET", info.asset_url, follow_redirects=True, timeout=300) as response:
+        response.raise_for_status()
+        with target_path.open("wb") as file_handle:
+            for chunk in response.iter_bytes():
+                if chunk:
+                    file_handle.write(chunk)
+
+    LOGGER.info("Downloaded update asset to %s", target_path)
+    return UpdateInfo(
+        configured=info.configured,
+        update_available=info.update_available,
+        current_version=info.current_version,
+        latest_version=info.latest_version,
+        release_url=info.release_url,
+        asset_name=info.asset_name,
+        asset_url=info.asset_url,
+        downloaded_path=str(target_path),
+        message=f"Downloaded update to {target_path}.",
+    )
+
+
+def check_and_download_if_enabled(config: UpdateConfig, base_dir: Path) -> UpdateInfo:
+    """Check for updates and optionally download the latest asset."""
+    info = check_for_update(config)
+    if info.update_available and config.auto_apply:
+        return apply_update(config, base_dir, restart=True)
+    if info.update_available and config.auto_download:
+        return download_update(config, base_dir)
+    return info
+
+
+def apply_update(config: UpdateConfig, base_dir: Path, *, restart: bool = False) -> UpdateInfo:
+    """Download, stage, and optionally launch a self-update script."""
+    if not _is_portable_root(base_dir.parent):
+        raise UpdateError("Auto apply is only supported in the portable app folder.")
+
+    info = download_update(config, base_dir)
+    if not info.update_available:
+        return info
+    if not info.downloaded_path:
+        raise UpdateError("Update asset was not downloaded.")
+
+    zip_path = Path(info.downloaded_path)
+    stage_dir = _extract_update(zip_path, base_dir, info.latest_version or "update")
+    source_root = _find_portable_root(stage_dir)
+    script_path = _write_apply_script(
+        target_root=base_dir.parent,
+        source_root=source_root,
+        current_pid=os.getpid(),
+        version=info.latest_version or "update",
+    )
+    message = f"Update staged at {source_root}. Run {script_path} to apply."
+    if restart:
+        _launch_apply_script(script_path)
+        _exit_process_soon()
+        message = "Update is being applied. The app will close and reopen automatically."
+
+    return UpdateInfo(
+        configured=info.configured,
+        update_available=info.update_available,
+        current_version=info.current_version,
+        latest_version=info.latest_version,
+        release_url=info.release_url,
+        asset_name=info.asset_name,
+        asset_url=info.asset_url,
+        downloaded_path=info.downloaded_path,
+        extracted_path=str(source_root),
+        apply_script=str(script_path),
+        message=message,
+    )
+
+
+def _fetch_latest_release(config: UpdateConfig) -> dict[str, Any]:
+    """Fetch latest release metadata from GitHub."""
+    try:
+        import httpx
+    except ImportError as exc:
+        raise UpdateError("httpx is required. Install dependencies with: pip install -r requirements.txt") from exc
+
+    url = f"https://api.github.com/repos/{config.repo}/releases"
+    response = httpx.get(url, headers={"Accept": "application/vnd.github+json"}, timeout=30)
+    response.raise_for_status()
+    releases = response.json()
+    if not isinstance(releases, list):
+        raise UpdateError("Unexpected GitHub releases response.")
+    for release in releases:
+        if release.get("draft"):
+            continue
+        if release.get("prerelease") and not config.allow_prerelease:
+            continue
+        return release
+    raise UpdateError("No suitable GitHub release was found.")
+
+
+def _find_asset(assets: Any, pattern: str) -> dict[str, Any] | None:
+    """Find the first release asset matching the configured pattern."""
+    if not isinstance(assets, list):
+        return None
+    needle = pattern.strip().lower()
+    for asset in assets:
+        name = str(asset.get("name") or "")
+        if needle and needle in name.lower():
+            return asset
+    return assets[0] if assets else None
+
+
+def _normalize_version(value: str) -> str:
+    """Strip common version prefixes."""
+    return value.strip().lstrip("vV")
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    """Convert a version string into a comparable tuple."""
+    numbers = [int(part) for part in re.findall(r"\d+", _normalize_version(value))]
+    return tuple(numbers or [0])
+
+
+def _safe_filename(value: str) -> str:
+    """Return a filesystem-safe filename."""
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", value).strip(" .") or "update.zip"
+
+
+def _unique_path(path: Path) -> Path:
+    """Avoid overwriting an existing update asset."""
+    if not path.exists():
+        return path
+    for index in range(2, 10_000):
+        candidate = path.with_name(f"{path.stem}_{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise UpdateError(f"Could not allocate update path for {path}")
+
+
+def _is_portable_root(root: Path) -> bool:
+    """Return whether a folder looks like the portable app root."""
+    return (root / "run-portable.bat").exists() and (root / "python" / "python.exe").exists() and (root / "sync").is_dir()
+
+
+def _extract_update(zip_path: Path, base_dir: Path, version: str) -> Path:
+    """Extract a release zip into a staging folder."""
+    stage_parent = base_dir / "downloads" / "updates" / "_staged"
+    stage_parent.mkdir(parents=True, exist_ok=True)
+    stage_dir = stage_parent / f"{_safe_filename(version)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+    stage_dir.mkdir(parents=True)
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            archive.extractall(stage_dir)
+    except zipfile.BadZipFile as exc:
+        raise UpdateError(f"Update asset is not a valid zip file: {zip_path}") from exc
+    return stage_dir
+
+
+def _find_portable_root(stage_dir: Path) -> Path:
+    """Find the app root inside an extracted portable zip."""
+    candidates = [stage_dir, *[path for path in stage_dir.iterdir() if path.is_dir()]]
+    for candidate in candidates:
+        if (candidate / "run-portable.bat").exists() and (candidate / "sync" / "main.py").exists():
+            return candidate
+    raise UpdateError("The update zip does not contain a portable app root.")
+
+
+def _write_apply_script(target_root: Path, source_root: Path, current_pid: int, version: str) -> Path:
+    """Write a PowerShell script that applies the staged update after shutdown."""
+    script_dir = target_root / "sync" / "downloads" / "updates"
+    script_dir.mkdir(parents=True, exist_ok=True)
+    script_path = script_dir / f"apply-update-{_safe_filename(version)}.ps1"
+    log_path = script_dir / f"apply-update-{_safe_filename(version)}.log"
+    source = str(source_root)
+    target = str(target_root)
+    script = f"""$ErrorActionPreference = "Stop"
+$SourceRoot = @'
+{source}
+'@
+$TargetRoot = @'
+{target}
+'@
+$LogPath = @'
+{log_path}
+'@
+$PidToWait = {current_pid}
+Start-Transcript -Path $LogPath -Append | Out-Null
+try {{
+  if ($PidToWait -gt 0) {{
+    Wait-Process -Id $PidToWait -Timeout 90 -ErrorAction SilentlyContinue
+  }}
+  Start-Sleep -Seconds 2
+  $ExcludedDirs = @(
+    (Join-Path $SourceRoot "sync\\logs"),
+    (Join-Path $SourceRoot "sync\\downloads"),
+    (Join-Path $SourceRoot "sync\\uploads"),
+    (Join-Path $SourceRoot "sync\\exports"),
+    (Join-Path $SourceRoot "sync\\.preview_cache")
+  )
+  $RobocopyArgs = @($SourceRoot, $TargetRoot, "/E", "/R:3", "/W:2", "/XD") + $ExcludedDirs + @("/XF", "config.yaml", ".env", "*.pyc", "*.pyo")
+  robocopy @RobocopyArgs | Out-Host
+  $Code = $LASTEXITCODE
+  if ($Code -ge 8) {{
+    throw "Robocopy failed with exit code $Code"
+  }}
+  Start-Process (Join-Path $TargetRoot "run-portable.bat")
+}} finally {{
+  Stop-Transcript | Out-Null
+}}
+"""
+    script_path.write_text(script, encoding="utf-8")
+    return script_path
+
+
+def _launch_apply_script(script_path: Path) -> None:
+    """Launch the apply script in a detached PowerShell process."""
+    executable = "pwsh" if shutil.which("pwsh") else "powershell"
+    subprocess.Popen(
+        [executable, "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+        cwd=str(script_path.parent),
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    )
+
+
+def _exit_process_soon(delay_seconds: float = 1.5) -> None:
+    """Exit the current API process after the HTTP response is returned."""
+
+    def worker() -> None:
+        time.sleep(delay_seconds)
+        LOGGER.info("Exiting process for self-update.")
+        os._exit(0)
+
+    thread = threading.Thread(target=worker, name="self-update-exit", daemon=True)
+    thread.start()

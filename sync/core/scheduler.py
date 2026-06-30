@@ -10,6 +10,7 @@ from typing import Any
 
 from .config import AppConfig, enabled_files, load_config
 from .sync_engine import SyncEngine
+from .updater import check_and_download_if_enabled
 
 
 LOGGER = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class SyncRuntime:
         self._start_scheduler()
         if self.config.api.enabled:
             self._start_api()
+        self._check_updates_on_startup()
 
     def stop(self) -> None:
         """Stop scheduler and API server."""
@@ -153,6 +155,20 @@ class SyncRuntime:
         self.api_thread = threading.Thread(target=self.api_server.run, name="sync-api", daemon=True)
         self.api_thread.start()
         LOGGER.info("Sync API listening on http://%s:%s", self.config.api.host, self.config.api.port)
+
+    def _check_updates_on_startup(self) -> None:
+        """Run a best-effort GitHub update check in the background."""
+        if not self.config.updates.enabled or not self.config.updates.check_on_startup:
+            return
+
+        def task() -> None:
+            try:
+                info = check_and_download_if_enabled(self.config.updates, self.config.base_dir)
+                LOGGER.info("Update check: %s", info.message)
+            except Exception:
+                LOGGER.exception("Update check failed.")
+
+        self.executor.submit(task)
 
 
 def run_foreground(config: AppConfig) -> None:
