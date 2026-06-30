@@ -1188,9 +1188,8 @@ export default function App() {
 
       <div className="app">
         <header className="appHeader">
-          <div className="appBrand">
-            <Database size={20} aria-hidden="true" />
-            <span>PowerBI Data DTL</span>
+          <div className="appBrand" title="PowerBI Data DTL">
+            <Database size={22} aria-hidden="true" />
           </div>
 
           <nav className="appNav" aria-label="Điều hướng chính">

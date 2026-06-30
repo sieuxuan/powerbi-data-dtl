@@ -24,7 +24,9 @@ Việc này cũng sửa một lỗi thực tế của bảng màu cũ: teal `#0D
 
 **Điểm nhấn (signature):** *status spine* — mỗi hàng job và metric card có thanh dọc 2px tô màu theo trạng thái ở mép trái; job đang chạy thì pulse. Primary button = nền ink đặc (không dùng màu brand). Tab/nav active = gạch chân ink.
 
-**Typography (ghi đè mục 4):** Inter cho UI/chữ; Cascadia Code/Consolas cho mọi giá trị dữ liệu (mono, tabular-nums). Micro-label uppercase tracked 11px. Số liệu metric: mono cỡ lớn — đây là "type hero".
+**Typography (cập nhật theo yêu cầu thống nhất font):** Dùng **một font Inter** cho toàn bộ giao diện *và* dữ liệu; chỉ giữ monospace (Cascadia/Consolas) cho khối lệnh SQL. Dùng `tabular-nums` ở số liệu metric và bảng để canh cột số. Micro-label uppercase tracked 11px. (Bỏ quy tắc "mono cho mọi dữ liệu" vì tạo cảm giác lệch font.)
+
+**Header (cập nhật):** Bỏ chữ tiêu đề (giữ icon thương hiệu); menu điều hướng canh **giữa** bằng grid `1fr / auto / 1fr`; chấm trạng thái bên phải. Disclosure "Tùy chọn nâng cao" đổi thành thanh bấm có viền/nền (hit-area ≥ 42px). Item trong dropdown `white-space: nowrap` để không bị xuống dòng.
 
 ---
 

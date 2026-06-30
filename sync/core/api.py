@@ -412,7 +412,9 @@ def create_app(config: AppConfig, runtime_status: Any | None = None) -> Any:
         path.mkdir(parents=True, exist_ok=True)
         try:
             if os.name == "nt":
-                subprocess.Popen(["explorer.exe", str(path)])
+                # os.startfile reliably opens Explorer and brings it to the foreground;
+                # explorer.exe via Popen is flaky about focus and path handling.
+                os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606
             elif os.name == "posix":
                 subprocess.Popen(["xdg-open", str(path)])
             else:
