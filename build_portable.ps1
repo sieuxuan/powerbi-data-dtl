@@ -183,9 +183,44 @@ for ($i = 0; $i -lt 30; $i++) {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+function New-AppTrayIcon {
+  $Bitmap = New-Object System.Drawing.Bitmap 32, 32
+  $Graphics = [System.Drawing.Graphics]::FromImage($Bitmap)
+  $Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+  $Graphics.Clear([System.Drawing.Color]::Transparent)
+
+  $BackgroundBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(11, 18, 32))
+  $AccentBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(34, 197, 94))
+  $BlueBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(56, 189, 248))
+  $PaperBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(248, 250, 252))
+  $BorderPen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(148, 163, 184)), 1
+
+  $Graphics.FillEllipse($BackgroundBrush, 1, 1, 30, 30)
+  $Graphics.DrawEllipse($BorderPen, 1, 1, 30, 30)
+  $Graphics.FillRectangle($BlueBrush, 9, 15, 4, 8)
+  $Graphics.FillRectangle($AccentBrush, 15, 10, 4, 13)
+  $Graphics.FillRectangle($PaperBrush, 21, 6, 4, 17)
+  $Graphics.DrawLine($BorderPen, 7, 24, 26, 24)
+
+  $Graphics.Dispose()
+  $BackgroundBrush.Dispose()
+  $AccentBrush.Dispose()
+  $BlueBrush.Dispose()
+  $PaperBrush.Dispose()
+  $BorderPen.Dispose()
+
+  $script:TrayIconBitmap = $Bitmap
+  return [System.Drawing.Icon]::FromHandle($Bitmap.GetHicon())
+}
+
 $Context = New-Object System.Windows.Forms.ApplicationContext
 $Tray = New-Object System.Windows.Forms.NotifyIcon
-$Tray.Icon = [System.Drawing.SystemIcons]::Application
+try {
+  $script:TrayIcon = New-AppTrayIcon
+  $Tray.Icon = $script:TrayIcon
+} catch {
+  $Tray.Icon = [System.Drawing.SystemIcons]::Application
+}
 $Tray.Text = "PowerBI Data DTL"
 $Tray.Visible = $true
 
@@ -254,6 +289,8 @@ $Tray.ShowBalloonTip(3000, "PowerBI Data DTL", "App is running in the system tra
 
 [System.Windows.Forms.Application]::Run($Context)
 $Tray.Dispose()
+if ($script:TrayIcon) { $script:TrayIcon.Dispose() }
+if ($script:TrayIconBitmap) { $script:TrayIconBitmap.Dispose() }
 '@
 Set-Content -Path (Join-Path $OutputPath "run-portable.ps1") -Value $RunPs1 -Encoding UTF8
 

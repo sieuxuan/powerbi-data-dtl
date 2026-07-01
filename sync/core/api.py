@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import hashlib
 import logging
 import os
@@ -29,6 +30,57 @@ from .updater import UpdateError, apply_update, check_for_update, download_updat
 
 LOGGER = logging.getLogger(__name__)
 SAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+
+
+def _unique_imported_job_name(name: str, existing_names: set[str]) -> str:
+    """Return a non-conflicting imported job name."""
+    normalized_existing = {existing.casefold() for existing in existing_names}
+    if name.casefold() not in normalized_existing:
+        return name
+
+    base_name = f"{name} import"
+    candidate = base_name
+    suffix = 2
+    while candidate.casefold() in normalized_existing:
+        candidate = f"{base_name} {suffix}"
+        suffix += 1
+    return candidate
+
+
+def _merge_bundle_jobs(
+    current_payload: dict[str, Any],
+    bundle_payload: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Append jobs from a bundle config into the current config payload."""
+    current_jobs = current_payload.get("files") or []
+    bundle_jobs = bundle_payload.get("files") or []
+    if not isinstance(current_jobs, list):
+        raise ValueError("Current config files must be a list")
+    if not isinstance(bundle_jobs, list):
+        raise ValueError("Bundle config files must be a list")
+
+    merged_payload = copy.deepcopy(current_payload)
+    merged_jobs = copy.deepcopy(current_jobs)
+    existing_names = {
+        str(job.get("name") or "").strip()
+        for job in merged_jobs
+        if isinstance(job, dict) and str(job.get("name") or "").strip()
+    }
+    added_names: list[str] = []
+
+    for index, raw_job in enumerate(bundle_jobs, start=1):
+        if not isinstance(raw_job, dict):
+            raise ValueError("Bundle contains an invalid job entry")
+        job = copy.deepcopy(raw_job)
+        original_name = str(job.get("name") or f"Imported job {index}").strip() or f"Imported job {index}"
+        imported_name = _unique_imported_job_name(original_name, existing_names)
+        job["name"] = imported_name
+        existing_names.add(imported_name)
+        added_names.append(imported_name)
+        merged_jobs.append(job)
+
+    merged_payload["files"] = merged_jobs
+    return merged_payload, added_names
 
 
 class ApiJobRunner:
@@ -267,9 +319,13 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
             archive.writestr("RESTORE.txt", readme)
         return export_path
 
-    def restore_export_bundle(content: bytes) -> dict[str, Any]:
-        """Restore config.yaml, .env, and uploads from an exported zip bundle."""
+    def restore_export_bundle(content: bytes, mode: str = "replace") -> dict[str, Any]:
+        """Restore an exported zip bundle using replace or merge-jobs mode."""
+        if mode not in {"replace", "merge_jobs"}:
+            raise HTTPException(status_code=400, detail="mode must be replace or merge_jobs")
         restored_uploads = 0
+        added_jobs: list[str] = []
+        env_restored = False
         with tempfile.TemporaryDirectory(dir=config_path.parent) as temp_dir:
             temp_path = Path(temp_dir)
             zip_path = temp_path / "bundle.zip"
@@ -293,18 +349,40 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
                 load_config(bundle_config)
             except ConfigError as exc:
                 raise HTTPException(status_code=400, detail=f"Bundle config is invalid: {exc}") from exc
+            try:
+                import yaml
+            except ImportError as exc:
+                raise HTTPException(status_code=500, detail="PyYAML is required") from exc
 
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            if config_path.exists():
-                shutil.copy2(config_path, config_path.with_suffix(f"{config_path.suffix}.before-import-{timestamp}.bak"))
-            shutil.copy2(bundle_config, config_path)
+            backup_path = config_path.with_suffix(f"{config_path.suffix}.before-import-{timestamp}.bak")
+            if mode == "replace":
+                if config_path.exists():
+                    shutil.copy2(config_path, backup_path)
+                shutil.copy2(bundle_config, config_path)
+            else:
+                bundle_payload = yaml.safe_load(bundle_config.read_text(encoding="utf-8")) or {}
+                if not isinstance(bundle_payload, dict):
+                    raise HTTPException(status_code=400, detail="Bundle config root must be a YAML mapping")
+                try:
+                    merged_payload, added_jobs = _merge_bundle_jobs(read_config_yaml(), bundle_payload)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                validate_config_payload(merged_payload)
+                if config_path.exists():
+                    shutil.copy2(config_path, backup_path)
+                config_path.write_text(
+                    yaml.safe_dump(merged_payload, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8",
+                )
 
             bundle_env = _first_existing(extract_dir / "sync" / ".env", extract_dir / ".env")
-            if bundle_env:
+            if bundle_env and mode == "replace":
                 env_path = config_path.parent / ".env"
                 if env_path.exists():
                     shutil.copy2(env_path, env_path.with_suffix(f"{env_path.suffix}.before-import-{timestamp}.bak"))
                 shutil.copy2(bundle_env, env_path)
+                env_restored = True
 
             bundle_uploads = extract_dir / "sync" / "uploads"
             if bundle_uploads.exists():
@@ -317,7 +395,15 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
                         shutil.copy2(path, target)
                         restored_uploads += 1
 
-        return {"status": "imported", "uploads": restored_uploads, "path": str(config_path)}
+        return {
+            "status": "imported",
+            "mode": mode,
+            "uploads": restored_uploads,
+            "jobs_added": len(added_jobs),
+            "job_names": added_jobs,
+            "env_restored": env_restored,
+            "path": str(config_path),
+        }
 
     def preview_export_bundle(content: bytes) -> dict[str, Any]:
         """Inspect an exported config bundle without restoring it."""
@@ -346,6 +432,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
                 try:
                     bundle_runtime = load_config(bundle_config)
                     summary["jobs_count"] = len(bundle_runtime.files)
+                    summary["job_names"] = [file_config.name for file_config in bundle_runtime.files]
                     summary["database"] = {
                         "host": bundle_runtime.database.host,
                         "name": bundle_runtime.database.name,
@@ -505,7 +592,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
             preview_result_cache[cache_key] = dict(result)
         return result
 
-    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.4")
+    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.5")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.api.cors_origins,
@@ -717,6 +804,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
     @app.post("/api/config/import-bundle")
     def import_bundle(payload: dict[str, Any]) -> dict[str, Any]:
         content_base64 = str(payload.get("content_base64") or "")
+        mode = str(payload.get("mode") or "replace").strip() or "replace"
         if "," in content_base64 and content_base64.lstrip().startswith("data:"):
             content_base64 = content_base64.split(",", 1)[1]
         if not content_base64:
@@ -725,7 +813,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
             content = base64.b64decode(content_base64, validate=True)
         except (binascii.Error, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Invalid base64 bundle content") from exc
-        return restore_export_bundle(content)
+        return restore_export_bundle(content, mode=mode)
 
     @app.post("/api/config/preview-bundle")
     def preview_bundle(payload: dict[str, Any]) -> dict[str, Any]:

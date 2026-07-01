@@ -912,6 +912,7 @@ export default function App() {
   const [setupTab, setSetupTab] = useState("jobs");
   const [setupNotice, setSetupNotice] = useState("");
   const [setupFocusJob, setSetupFocusJob] = useState(null);
+  const [setupAddJobToken, setSetupAddJobToken] = useState(0);
   const [copied, setCopied] = useState(false);
   const [apiOnline, setApiOnline] = useState(null);
   const [messageHiding, setMessageHiding] = useState(false);
@@ -1193,6 +1194,12 @@ export default function App() {
     setActiveMode("setup");
   }
 
+  function addSyncJobFromMonitor() {
+    setSetupTab("jobs");
+    setActiveMode("setup");
+    setSetupAddJobToken(Date.now());
+  }
+
   return (
     <>
       <input
@@ -1244,11 +1251,12 @@ export default function App() {
               notice={setupNotice}
               focusJobName={setupFocusJob?.name}
               focusToken={setupFocusJob?.token}
+              addJobToken={setupAddJobToken}
               setupTab={setupTab}
               onSetupTabChange={setSetupTab}
             />
           ) : activeMode === "sync" ? (
-            <SyncMonitor onEditJob={editSyncJob} />
+            <SyncMonitor onEditJob={editSyncJob} onAddJob={addSyncJobFromMonitor} />
           ) : !project ? (
             <div className="welcome">
               <div className="uploadCard">

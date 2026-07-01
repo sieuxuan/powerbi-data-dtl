@@ -7,7 +7,6 @@ import {
   Clock3,
   Copy,
   Database,
-  Download,
   Eye,
   FileSpreadsheet,
   FolderOpen,
@@ -45,7 +44,7 @@ const DEFAULT_CONFIG = {
   updates: {
     enabled: false,
     repo: "",
-    current_version: "1.0.4",
+    current_version: "1.0.5",
     asset_pattern: "PowerBIDataDTL-portable.zip",
     check_on_startup: true,
     auto_download: false,
@@ -520,7 +519,7 @@ function CronListEditor({ label, value, onChange }) {
   );
 }
 
-export default function SyncSetup({ notice = "", focusJobName = "", focusToken = 0, setupTab: controlledSetupTab = "", onSetupTabChange = null }) {
+export default function SyncSetup({ notice = "", focusJobName = "", focusToken = 0, addJobToken = 0, setupTab: controlledSetupTab = "", onSetupTabChange = null }) {
   const [configData, setConfigData] = useState(null);
   const [configPath, setConfigPath] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -553,13 +552,13 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   const [updateInfo, setUpdateInfo] = useState(null);
   const handledFocusTokenRef = useRef(null);
   const updateAutoCheckRef = useRef("");
+  const handledAddJobTokenRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const enabledJobs = useMemo(
     () => (configData?.files || []).filter((file) => file.enabled).length,
     [configData],
   );
   const validation = useMemo(() => validateSyncConfig(configData), [configData]);
-  const wizardValidation = useMemo(() => validateJobConfig(wizardJob || {}, 0), [wizardJob]);
   const setupTab = controlledSetupTab || localSetupTab;
 
   function setSetupTab(tab) {
@@ -606,6 +605,12 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
       setMessage(`Đang sửa job ${focusJobName}.`);
     }
   }, [configData, focusJobName, focusToken]);
+
+  useEffect(() => {
+    if (!configData || !addJobToken || handledAddJobTokenRef.current === addJobToken) return;
+    handledAddJobTokenRef.current = addJobToken;
+    addJob();
+  }, [configData, addJobToken]);
 
   useEffect(() => {
     if (setupTab !== "system" || !configData?.updates?.enabled) return;
@@ -743,7 +748,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
         method: "POST",
         body: JSON.stringify({ content_base64: dataUrl }),
       });
-      setPendingBundle({ fileName: file.name, dataUrl, preview });
+      setPendingBundle({ fileName: file.name, dataUrl, preview, mode: "merge_jobs" });
       setMessage(`Đã đọc bundle ${file.name}. Kiểm tra preview rồi xác nhận import.`);
     } catch (importError) {
       setError(`Preview bundle lỗi: ${importError.message}`);
@@ -759,10 +764,18 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
     try {
       const result = await syncApi("/api/config/import-bundle", {
         method: "POST",
-        body: JSON.stringify({ content_base64: pendingBundle.dataUrl }),
+        body: JSON.stringify({
+          content_base64: pendingBundle.dataUrl,
+          mode: pendingBundle.mode || "merge_jobs",
+        }),
       });
       setPendingBundle(null);
-      setMessage(`Đã import bundle. Khôi phục ${result.uploads || 0} file uploads.`);
+      const isMerge = result.mode === "merge_jobs";
+      setMessage(
+        isMerge
+          ? `Đã import thêm ${result.jobs_added || 0} job từ bundle. Khôi phục ${result.uploads || 0} file uploads.`
+          : `Đã ghi đè cấu hình từ bundle. Khôi phục ${result.uploads || 0} file uploads.`
+      );
       await loadConfig();
     } catch (importError) {
       setError(`Import bundle lỗi: ${importError.message}`);
@@ -1136,6 +1149,11 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
 
   async function saveWizardJob() {
     if (!configData || !wizardJob) return;
+    const validationResult = validateJobConfig(wizardJob, 0);
+    if (validationResult.messages.length) {
+      setWizardMessage(`Cần kiểm tra lại: ${validationResult.messages[0]}`);
+      return;
+    }
     const nextConfig = {
       ...configData,
       files: [...(configData.files || []), wizardJob],
@@ -1266,7 +1284,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       <label>
                         Link share
                         <input value={wizardJob.source?.share_url || ""} placeholder="https://...sharepoint.com/..." onChange={(event) => patchWizardNested("source", { share_url: event.target.value })} />
-                        {wizardValidation.fields.source && <small className="fieldError">{wizardValidation.fields.source}</small>}
                       </label>
                       <label>
                         Direct download URL
@@ -1283,7 +1300,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       <label>
                         Đường dẫn file
                         <input value={wizardJob.source?.path || ""} placeholder="./uploads/report.xlsx hoặc D:/Data/report.xlsx" onChange={(event) => patchWizardNested("source", { path: event.target.value })} />
-                        {wizardValidation.fields.source && <small className="fieldError">{wizardValidation.fields.source}</small>}
                       </label>
                     </div>
                   )}
@@ -1399,38 +1415,33 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     <label>
                       Tên job
                       <input value={wizardJob.name || ""} onChange={(event) => patchWizardJob({ name: event.target.value })} />
-                      {wizardValidation.fields.name && <small className="fieldError">{wizardValidation.fields.name}</small>}
                     </label>
                     <label>
                       Schema đích
                       <input value={wizardJob.target?.schema || ""} onChange={(event) => patchWizardNested("target", { schema: event.target.value })} />
-                      {wizardValidation.fields.schema && <small className="fieldError">{wizardValidation.fields.schema}</small>}
                     </label>
                     <label>
                       Bảng đích
                       <input value={wizardJob.target?.table || ""} onChange={(event) => patchWizardNested("target", { table: event.target.value })} />
-                      {wizardValidation.fields.table && <small className="fieldError">{wizardValidation.fields.table}</small>}
                     </label>
                     <label>
                       Chế độ sync
                       <select value={wizardJob.sync_mode || "truncate_insert"} onChange={(event) => patchWizardJob({ sync_mode: event.target.value })}>
                         <option value="truncate_insert">Xóa dữ liệu rồi import</option>
                         <option value="drop_recreate">Tạo lại bảng</option>
-                        <option value="append">Thêm dòng mới</option>
+                        <option value="append">Thêm dòng mới, không xóa dữ liệu cũ</option>
                         <option value="upsert">Upsert theo khóa</option>
                       </select>
                     </label>
                     <label>
                       Primary key
                       <input value={formatList(wizardJob.target?.primary_key)} onChange={(event) => patchWizardNested("target", { primary_key: parseCsvList(event.target.value) })} />
-                      {wizardValidation.fields.primary_key && <small className="fieldError">{wizardValidation.fields.primary_key}</small>}
                     </label>
                     <CronListEditor
                       label="Lịch riêng"
                       value={wizardJob.crons}
                       onChange={(value) => patchWizardJob({ crons: value, cron: value[0] || null })}
                     />
-                    {wizardValidation.fields.cron && <small className="fieldError">{wizardValidation.fields.cron}</small>}
                   </div>
                   {wizardPreview?.sheets?.length > 0 && (
                     <div className="columnMappingPanel">
@@ -1480,7 +1491,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       <ChevronLeft size={16} aria-hidden="true" />
                       Quay lại
                     </button>
-                    <button type="button" className="primary" onClick={saveWizardJob} disabled={isSaving || Boolean(wizardValidation.messages.length)}>
+                    <button type="button" className="primary" onClick={saveWizardJob} disabled={isSaving}>
                       <Save size={16} aria-hidden="true" />
                       Lưu job
                     </button>
@@ -1584,11 +1595,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
               return (
                 <article className={`jobEditor ${isEditing ? "editing" : "compact"}`} key={`job-${index}`}>
                   <div className="jobCompactHeader">
-                    {isEditing && (
-                      <button type="button" className="modalCloseButton" aria-label="Đóng" onClick={() => setEditingJobIndex(-1)}>
-                        ×
-                      </button>
-                    )}
                     <div className="jobSummary">
                       {isEditing ? (
                         <input
@@ -1646,6 +1652,11 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                         </button>
                       )}
                     </div>
+                    {isEditing && (
+                      <button type="button" className="modalCloseButton" aria-label="Đóng" onClick={() => setEditingJobIndex(-1)}>
+                        ×
+                      </button>
+                    )}
                     {!isEditing && (
                       <button type="button" className="iconButton danger jobDeleteButton" title="Xóa job" onClick={() => removeJob(index)}>
                         <Trash2 size={16} aria-hidden="true" />
@@ -1751,7 +1762,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                         <select value={file.sync_mode || "truncate_insert"} onChange={(event) => patchJob(index, { sync_mode: event.target.value })}>
                           <option value="truncate_insert">Xóa dữ liệu rồi import</option>
                           <option value="drop_recreate">Tạo lại bảng</option>
-                          <option value="append">Thêm dòng mới</option>
+                          <option value="append">Thêm dòng mới, không xóa dữ liệu cũ</option>
                           <option value="upsert">Upsert theo khóa</option>
                         </select>
                       </label>
@@ -1845,33 +1856,6 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
 
           {setupTab === "system" && (
           <>
-          <section className="setupSection">
-            <div className="sectionTitle">
-              <Download size={18} aria-hidden="true" />
-              <h3>Thư mục dữ liệu</h3>
-            </div>
-            <div className="setupGrid">
-              <div className="folderActions wideField">
-                <button type="button" className="secondaryButton" onClick={() => openAppFolder("uploads")}>
-                  <FolderOpen size={16} aria-hidden="true" />
-                  Mở uploads
-                </button>
-                <button type="button" className="secondaryButton" onClick={() => openAppFolder("downloads")}>
-                  <FolderOpen size={16} aria-hidden="true" />
-                  Mở downloads
-                </button>
-                <button type="button" className="secondaryButton" onClick={() => openAppFolder("logs")}>
-                  <FolderOpen size={16} aria-hidden="true" />
-                  Mở logs
-                </button>
-                <button type="button" className="secondaryButton" onClick={() => openAppFolder("exports")}>
-                  <FolderOpen size={16} aria-hidden="true" />
-                  Mở exports
-                </button>
-              </div>
-            </div>
-          </section>
-
           <UpdateSection
             updateConfig={{
               enabled: configData.updates.enabled,
@@ -1912,15 +1896,38 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                 Mở exports
               </button>
             </div>
-            <p className="helperText">Bundle khôi phục `sync/config.yaml`, `.env` nếu có, và các file trong `sync/uploads`. Config cũ được backup trước khi ghi đè.</p>
+            <p className="helperText">Bundle có thể thêm job vào cấu hình hiện tại hoặc ghi đè toàn bộ khi cần chuyển sang máy mới. Config cũ luôn được backup trước khi import.</p>
             {pendingBundle && (
               <div className="bundlePreview">
                 <strong>{pendingBundle.fileName}</strong>
                 <span>Config: {pendingBundle.preview.has_config ? "có" : "không"} · .env: {pendingBundle.preview.has_env ? "có" : "không"} · Uploads: {pendingBundle.preview.uploads_count || 0} · Jobs: {pendingBundle.preview.jobs_count ?? "?"}</span>
+                {pendingBundle.preview.job_names?.length > 0 && (
+                  <small>Job trong bundle: {pendingBundle.preview.job_names.slice(0, 4).join(", ")}{pendingBundle.preview.job_names.length > 4 ? "..." : ""}</small>
+                )}
                 {pendingBundle.preview.database && (
                   <small>DB: {pendingBundle.preview.database.host}/{pendingBundle.preview.database.name} · schema {pendingBundle.preview.database.schema}</small>
                 )}
                 {pendingBundle.preview.config_error && <small className="errorText">{pendingBundle.preview.config_error}</small>}
+                <div className="bundleImportModes" role="radiogroup" aria-label="Cách import bundle">
+                  <label className="checkField">
+                    <input
+                      type="radio"
+                      name="bundleImportMode"
+                      checked={pendingBundle.mode === "merge_jobs"}
+                      onChange={() => setPendingBundle((bundle) => bundle ? { ...bundle, mode: "merge_jobs" } : bundle)}
+                    />
+                    Chỉ thêm job từ bundle
+                  </label>
+                  <label className="checkField">
+                    <input
+                      type="radio"
+                      name="bundleImportMode"
+                      checked={pendingBundle.mode === "replace"}
+                      onChange={() => setPendingBundle((bundle) => bundle ? { ...bundle, mode: "replace" } : bundle)}
+                    />
+                    Ghi đè toàn bộ setting
+                  </label>
+                </div>
                 <div className="rowActions">
                   <button type="button" onClick={confirmImportBundle} disabled={isImportingBundle || !pendingBundle.preview.has_config || pendingBundle.preview.config_error}>
                     <Save size={15} aria-hidden="true" />

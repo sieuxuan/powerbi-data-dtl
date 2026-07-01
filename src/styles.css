@@ -499,6 +499,7 @@ td input, td select { min-height: 34px; }
   box-shadow: var(--shadow-sm);
 }
 .modalCloseButton:hover { background: #F3F4F6; border-color: var(--line-strong); }
+.jobEditor.editing .modalCloseButton { grid-column: 4; grid-row: 1; }
 .jobEditor.editing .jobCompactHeader {
   position: sticky; top: -20px; z-index: 2;
   margin: -8px -8px 8px; padding: 14px 16px;
@@ -733,6 +734,8 @@ td input, td select { min-height: 34px; }
 
 .bundlePreview { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper); padding: 12px; display: grid; gap: 6px; }
 .bundlePreview strong, .bundlePreview span, .bundlePreview small { overflow-wrap: anywhere; }
+.bundleImportModes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.bundleImportModes .checkField { min-height: 30px; font-size: 13px; }
 
 .notificationLayout { display: grid; grid-template-columns: minmax(260px, 0.75fr) minmax(0, 1.25fr); gap: 10px; }
 .notificationCard { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper); padding: 12px; display: grid; gap: 10px; align-content: start; }
@@ -837,6 +840,10 @@ td input, td select { min-height: 34px; }
   .jobEditor.editing .jobMeta,
   .jobEditor.editing .jobCompactHeader .rowActions {
     grid-column: 1 / -1;
+  }
+  .jobEditor.editing .modalCloseButton {
+    grid-column: 2;
+    grid-row: 1;
   }
   .jobEditor.editing .jobMeta, .jobEditor.editing .rowActions { justify-content: flex-start; }
   .sectionActions { justify-content: flex-start; margin-left: 0; flex-wrap: wrap; }

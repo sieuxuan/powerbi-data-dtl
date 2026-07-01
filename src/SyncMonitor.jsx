@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity, AlertCircle, Pencil, Play, RefreshCcw } from "lucide-react";
+import { Activity, AlertCircle, Pencil, Play, Plus, RefreshCcw } from "lucide-react";
 
 export const SYNC_API_URL = import.meta.env.VITE_SYNC_API_URL || "http://127.0.0.1:8765";
 
@@ -97,7 +97,7 @@ export async function syncApi(path, options = {}) {
   return response.json();
 }
 
-export default function SyncMonitor({ onEditJob }) {
+export default function SyncMonitor({ onEditJob, onAddJob }) {
   const isMountedRef = useRef(true);
   const [jobs, setJobs] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -178,6 +178,10 @@ export default function SyncMonitor({ onEditJob }) {
           <button type="button" className="btn" onClick={() => refreshSyncData()}>
             <RefreshCcw size={15} aria-hidden="true" />
             Tải lại
+          </button>
+          <button type="button" className="btn" onClick={() => onAddJob?.()}>
+            <Plus size={15} aria-hidden="true" />
+            Thêm job
           </button>
           <button type="button" className="btn primary" onClick={() => triggerRunAll(false)}>
             <Play size={15} aria-hidden="true" />
