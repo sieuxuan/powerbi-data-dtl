@@ -103,5 +103,5 @@ Frontend Vite doc API URL tu `VITE_SYNC_API_URL`, fallback `http://127.0.0.1:876
 - API cache preview SharePoint trong `.preview_cache`, tra progress job cho dashboard va dung PostgreSQL connection pool trong tien trinh chay nen.
 - Link online ho tro SharePoint/OneDrive, Google Sheets public/export, Google Drive file/direct download bang backend de tranh CORS.
 - `maintenance` cau hinh retention cho `sync_log`, `downloads`, `uploads`, `.preview_cache`.
-- `updates` kiem tra GitHub Releases khi scheduler khoi dong; neu `auto_download=true` thi tai asset portable moi hon `current_version`; neu `auto_apply=true` trong portable thi giai nen, copy file moi va mo lai app, giu nguyen `sync/config.yaml`, `sync/.env`, logs/uploads/downloads.
+- `updates` kiem tra GitHub Releases khi scheduler khoi dong; neu `auto_download=true` thi tai san asset portable moi hon `current_version`. Viec cai ban moi duoc kich hoat tu UI de tranh tu thay file nen ngoai y muon; updater giu nguyen `sync/config.yaml`, `sync/.env`, logs/uploads/downloads.
 - Windows Service mac dinh: `PowerBIDataDTLSync`.

@@ -78,6 +78,9 @@ def check_for_update(config: UpdateConfig, base_dir: Path | None = None) -> Upda
         raise UpdateError("Latest GitHub release has no tag_name.")
     asset = _find_asset(release.get("assets", []), _asset_pattern(config))
     update_available = _version_tuple(latest_version) > _version_tuple(current_version)
+    downloaded_path = None
+    if update_available and asset and base_dir is not None:
+        downloaded_path = _existing_download_path(config, base_dir, str(asset.get("name") or ""), latest_version)
     return UpdateInfo(
         configured=True,
         update_available=update_available,
@@ -86,6 +89,7 @@ def check_for_update(config: UpdateConfig, base_dir: Path | None = None) -> Upda
         release_url=release.get("html_url"),
         asset_name=asset.get("name") if asset else None,
         asset_url=asset.get("browser_download_url") if asset else None,
+        downloaded_path=str(downloaded_path) if downloaded_path else None,
         message="Update available." if update_available else "Already up to date.",
     )
 
@@ -103,18 +107,35 @@ def download_update(config: UpdateConfig, base_dir: Path) -> UpdateInfo:
     except ImportError as exc:
         raise UpdateError("httpx is required. Install dependencies with: pip install -r requirements.txt") from exc
 
-    download_dir = Path(config.download_dir)
-    if not download_dir.is_absolute():
-        download_dir = base_dir / download_dir
+    download_dir = _download_dir(config, base_dir)
     download_dir.mkdir(parents=True, exist_ok=True)
-    target_path = _unique_path(download_dir / _safe_filename(info.asset_name))
+    target_path = _download_target_path(download_dir, info.asset_name, info.latest_version)
+    if target_path.exists() and target_path.stat().st_size > 0:
+        LOGGER.info("Update asset is already downloaded at %s", target_path)
+        return UpdateInfo(
+            configured=info.configured,
+            update_available=info.update_available,
+            current_version=info.current_version,
+            latest_version=info.latest_version,
+            release_url=info.release_url,
+            asset_name=info.asset_name,
+            asset_url=info.asset_url,
+            downloaded_path=str(target_path),
+            message=f"Update already downloaded at {target_path}.",
+        )
 
-    with httpx.stream("GET", info.asset_url, follow_redirects=True, timeout=300) as response:
-        response.raise_for_status()
-        with target_path.open("wb") as file_handle:
-            for chunk in response.iter_bytes():
-                if chunk:
-                    file_handle.write(chunk)
+    partial_path = target_path.with_suffix(f"{target_path.suffix}.part")
+    try:
+        with httpx.stream("GET", info.asset_url, follow_redirects=True, timeout=300) as response:
+            response.raise_for_status()
+            with partial_path.open("wb") as file_handle:
+                for chunk in response.iter_bytes():
+                    if chunk:
+                        file_handle.write(chunk)
+        partial_path.replace(target_path)
+    except Exception as exc:
+        partial_path.unlink(missing_ok=True)
+        raise UpdateError(f"Could not download update asset: {exc}") from exc
 
     LOGGER.info("Downloaded update asset to %s", target_path)
     return UpdateInfo(
@@ -133,8 +154,6 @@ def download_update(config: UpdateConfig, base_dir: Path) -> UpdateInfo:
 def check_and_download_if_enabled(config: UpdateConfig, base_dir: Path) -> UpdateInfo:
     """Check for updates and optionally download the latest asset."""
     info = check_for_update(config, base_dir)
-    if info.update_available and config.auto_apply:
-        return apply_update(config, base_dir, restart=True)
     if info.update_available and config.auto_download:
         return download_update(config, base_dir)
     return info
@@ -189,9 +208,12 @@ def _fetch_latest_release(config: UpdateConfig, repo: str) -> dict[str, Any]:
         raise UpdateError("httpx is required. Install dependencies with: pip install -r requirements.txt") from exc
 
     url = f"https://api.github.com/repos/{repo}/releases"
-    response = httpx.get(url, headers={"Accept": "application/vnd.github+json"}, timeout=30)
-    response.raise_for_status()
-    releases = response.json()
+    try:
+        response = httpx.get(url, headers={"Accept": "application/vnd.github+json"}, timeout=30)
+        response.raise_for_status()
+        releases = response.json()
+    except Exception as exc:
+        raise UpdateError(f"Could not fetch GitHub releases for {repo}: {exc}") from exc
     if not isinstance(releases, list):
         raise UpdateError("Unexpected GitHub releases response.")
     for release in releases:
@@ -265,6 +287,39 @@ def _unique_path(path: Path) -> Path:
     raise UpdateError(f"Could not allocate update path for {path}")
 
 
+def _download_dir(config: UpdateConfig, base_dir: Path) -> Path:
+    """Return the absolute update download directory."""
+    download_dir = Path(config.download_dir)
+    if download_dir.is_absolute():
+        return download_dir
+    return base_dir / download_dir
+
+
+def _download_target_path(download_dir: Path, asset_name: str, latest_version: str | None) -> Path:
+    """Return a stable, versioned path for a downloaded update asset."""
+    safe_name = _safe_filename(asset_name)
+    path = download_dir / safe_name
+    version = _safe_filename(_normalize_version(latest_version or ""))
+    if not version:
+        return path
+    if version.lower() in path.stem.lower():
+        return path
+    return path.with_name(f"{path.stem}-{version}{path.suffix}")
+
+
+def _existing_download_path(
+    config: UpdateConfig,
+    base_dir: Path,
+    asset_name: str,
+    latest_version: str | None,
+) -> Path | None:
+    """Return a previously downloaded update asset for this version, if present."""
+    target_path = _download_target_path(_download_dir(config, base_dir), asset_name, latest_version)
+    if target_path.exists() and target_path.stat().st_size > 0:
+        return target_path
+    return None
+
+
 def _is_portable_root(root: Path) -> bool:
     """Return whether a folder looks like the portable app root."""
     return (root / "run-portable.bat").exists() and (root / "python" / "python.exe").exists() and (root / "sync").is_dir()
@@ -280,10 +335,22 @@ def _extract_update(zip_path: Path, base_dir: Path, version: str) -> Path:
     stage_dir.mkdir(parents=True)
     try:
         with zipfile.ZipFile(zip_path) as archive:
-            archive.extractall(stage_dir)
+            _safe_extract_zip(archive, stage_dir)
     except zipfile.BadZipFile as exc:
         raise UpdateError(f"Update asset is not a valid zip file: {zip_path}") from exc
     return stage_dir
+
+
+def _safe_extract_zip(archive: zipfile.ZipFile, target_dir: Path) -> None:
+    """Extract a zip archive without allowing paths outside target_dir."""
+    resolved_target = target_dir.resolve()
+    for member in archive.infolist():
+        member_path = (target_dir / member.filename).resolve()
+        try:
+            member_path.relative_to(resolved_target)
+        except ValueError as exc:
+            raise UpdateError("Update zip contains an unsafe path.") from exc
+    archive.extractall(target_dir)
 
 
 def _find_portable_root(stage_dir: Path) -> Path:
@@ -333,7 +400,7 @@ try {{
   if ($Code -ge 8) {{
     throw "Robocopy failed with exit code $Code"
   }}
-  Start-Process (Join-Path $TargetRoot "run-portable.bat")
+  Start-Process (Join-Path $TargetRoot "run-portable.bat") -WindowStyle Hidden
 }} finally {{
   Stop-Transcript | Out-Null
 }}
@@ -344,9 +411,23 @@ try {{
 
 def _launch_apply_script(script_path: Path) -> None:
     """Launch the apply script in a detached PowerShell process."""
-    executable = "pwsh" if shutil.which("pwsh") else "powershell"
+    if os.name == "nt":
+        system_root = os.environ.get("SystemRoot", r"C:\Windows")
+        windows_powershell = Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+        executable = str(windows_powershell) if windows_powershell.exists() else "powershell"
+    else:
+        executable = "pwsh" if shutil.which("pwsh") else "powershell"
     subprocess.Popen(
-        [executable, "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+        [
+            executable,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            str(script_path),
+        ],
         cwd=str(script_path.parent),
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )

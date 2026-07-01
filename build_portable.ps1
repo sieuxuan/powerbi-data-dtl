@@ -108,6 +108,10 @@ Copy-Item (Join-Path $SyncOutput ".env.example") (Join-Path $SyncOutput ".env") 
 
 Write-Step "Tạo launcher portable"
 $RunPs1 = @'
+param(
+  [switch]$NoBrowser
+)
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
@@ -120,35 +124,146 @@ if (-not (Test-Path $EnvPath)) {
   Copy-Item (Join-Path $Root "sync\.env.example") $EnvPath
 }
 $AppUrl = "http://127.0.0.1:8765/"
-$ServerJob = Start-Job -ScriptBlock {
-  param($RootPath)
-  Set-Location $RootPath
-  & ".\python\python.exe" ".\sync\main.py" --config ".\sync\config.yaml" start
-} -ArgumentList $Root
-for ($i = 0; $i -lt 30; $i++) {
+$PythonExe = Join-Path $Root "python\python.exe"
+$LogsDir = Join-Path $Root "sync\logs"
+New-Item -ItemType Directory -Force $LogsDir | Out-Null
+$RuntimeLog = Join-Path $LogsDir "runtime.log"
+$RuntimeErr = Join-Path $LogsDir "runtime.err.log"
+
+function Test-ApiReady {
   try {
     Invoke-WebRequest -UseBasicParsing "$AppUrl`api/health" -TimeoutSec 1 | Out-Null
-    Start-Process $AppUrl
-    break
+    return $true
   } catch {
-    Start-Sleep -Seconds 1
+    return $false
   }
 }
-Wait-Job $ServerJob | Out-Null
-Receive-Job $ServerJob
+
+function Invoke-ApiPost {
+  param([string]$Path)
+  Invoke-WebRequest -UseBasicParsing -Method Post "$AppUrl$Path" -TimeoutSec 5 | Out-Null
+}
+
+function Start-AppServer {
+  if (Test-ApiReady) {
+    return
+  }
+  $script:ServerProcess = Start-Process -FilePath $PythonExe `
+    -ArgumentList @("sync\main.py", "--config", "sync\config.yaml", "start") `
+    -WorkingDirectory $Root `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $RuntimeLog `
+    -RedirectStandardError $RuntimeErr `
+    -PassThru
+  $script:OwnsServer = $true
+}
+
+function Stop-AppServer {
+  if ($script:OwnsServer -and $script:ServerProcess -and -not $script:ServerProcess.HasExited) {
+    Stop-Process -Id $script:ServerProcess.Id -Force -ErrorAction SilentlyContinue
+  }
+}
+
+$OwnsServer = $false
+$ServerProcess = $null
+if (-not (Test-ApiReady)) {
+  Start-AppServer
+}
+
+for ($i = 0; $i -lt 30; $i++) {
+  if (Test-ApiReady) {
+    if (-not $NoBrowser) {
+      Start-Process $AppUrl
+    }
+    break
+  }
+  Start-Sleep -Seconds 1
+}
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+$Context = New-Object System.Windows.Forms.ApplicationContext
+$Tray = New-Object System.Windows.Forms.NotifyIcon
+$Tray.Icon = [System.Drawing.SystemIcons]::Application
+$Tray.Text = "PowerBI Data DTL"
+$Tray.Visible = $true
+
+$Menu = New-Object System.Windows.Forms.ContextMenuStrip
+$OpenItem = $Menu.Items.Add("Open dashboard")
+$RunAllItem = $Menu.Items.Add("Run all")
+$PauseSchedulerItem = $Menu.Items.Add("Pause scheduler")
+$ResumeSchedulerItem = $Menu.Items.Add("Resume scheduler")
+$RestartApiItem = $Menu.Items.Add("Restart API")
+$Menu.Items.Add("-") | Out-Null
+$FolderItem = $Menu.Items.Add("Open app folder")
+$LogsItem = $Menu.Items.Add("Open logs")
+$Menu.Items.Add("-") | Out-Null
+$ExitItem = $Menu.Items.Add("Stop and exit")
+
+$OpenItem.add_Click({ Start-Process $AppUrl })
+$RunAllItem.add_Click({
+  try {
+    Invoke-ApiPost "api/run-all?force=false"
+    $Tray.ShowBalloonTip(2500, "PowerBI Data DTL", "Run all command sent.", [System.Windows.Forms.ToolTipIcon]::Info)
+  } catch {
+    $Tray.ShowBalloonTip(3500, "PowerBI Data DTL", "Run all failed. Check runtime logs.", [System.Windows.Forms.ToolTipIcon]::Error)
+  }
+})
+$PauseSchedulerItem.add_Click({
+  try {
+    Invoke-ApiPost "api/runtime/scheduler/pause"
+    $Tray.ShowBalloonTip(2500, "PowerBI Data DTL", "Scheduler paused.", [System.Windows.Forms.ToolTipIcon]::Info)
+  } catch {
+    $Tray.ShowBalloonTip(3500, "PowerBI Data DTL", "Could not pause scheduler.", [System.Windows.Forms.ToolTipIcon]::Error)
+  }
+})
+$ResumeSchedulerItem.add_Click({
+  try {
+    Invoke-ApiPost "api/runtime/scheduler/resume"
+    $Tray.ShowBalloonTip(2500, "PowerBI Data DTL", "Scheduler resumed.", [System.Windows.Forms.ToolTipIcon]::Info)
+  } catch {
+    $Tray.ShowBalloonTip(3500, "PowerBI Data DTL", "Could not resume scheduler.", [System.Windows.Forms.ToolTipIcon]::Error)
+  }
+})
+$RestartApiItem.add_Click({
+  try {
+    Stop-AppServer
+    Start-Sleep -Seconds 1
+    Start-AppServer
+    for ($i = 0; $i -lt 20; $i++) {
+      if (Test-ApiReady) { break }
+      Start-Sleep -Milliseconds 500
+    }
+    $Tray.ShowBalloonTip(2500, "PowerBI Data DTL", "API restarted.", [System.Windows.Forms.ToolTipIcon]::Info)
+  } catch {
+    $Tray.ShowBalloonTip(3500, "PowerBI Data DTL", "Could not restart API.", [System.Windows.Forms.ToolTipIcon]::Error)
+  }
+})
+$FolderItem.add_Click({ Start-Process $Root })
+$LogsItem.add_Click({ Start-Process $LogsDir })
+$ExitItem.add_Click({
+  $Tray.Visible = $false
+  Stop-AppServer
+  $Context.ExitThread()
+})
+
+$Tray.ContextMenuStrip = $Menu
+$Tray.add_DoubleClick({ Start-Process $AppUrl })
+$Tray.ShowBalloonTip(3000, "PowerBI Data DTL", "App is running in the system tray.", [System.Windows.Forms.ToolTipIcon]::Info)
+
+[System.Windows.Forms.Application]::Run($Context)
+$Tray.Dispose()
 '@
 Set-Content -Path (Join-Path $OutputPath "run-portable.ps1") -Value $RunPs1 -Encoding UTF8
 
 $RunBat = @'
 @echo off
 cd /d "%~dp0"
-where pwsh >nul 2>nul
-if %errorlevel%==0 (
-  pwsh -ExecutionPolicy Bypass -File "%~dp0run-portable.ps1"
-) else (
-  powershell -ExecutionPolicy Bypass -File "%~dp0run-portable.ps1"
-)
-pause
+set "POWERSHELL_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "%POWERSHELL_EXE%" set "POWERSHELL_EXE=powershell"
+start "" "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%~dp0run-portable.ps1"
+exit /b 0
 '@
 Set-Content -Path (Join-Path $OutputPath "run-portable.bat") -Value $RunBat -Encoding ASCII
 
@@ -160,6 +275,10 @@ Chay nhanh:
 
 Giao dien:
   http://127.0.0.1:8765/
+
+Sau khi chay, ung dung nam trong system tray. Bam dup icon tray de mo dashboard,
+hoac chuot phai icon tray de Run all, Pause/Resume scheduler, Restart API,
+mo thu muc log va dung runtime.
 
 Lan dau tren may moi:
 1. Giai nen file zip vao mot thu muc bat ky, vi du D:\PowerBIDataDTL.

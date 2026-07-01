@@ -288,8 +288,11 @@ def _parse_database(raw: dict[str, Any]) -> DatabaseConfig:
 
 def _parse_schedule(raw: dict[str, Any]) -> ScheduleConfig:
     """Parse scheduler defaults."""
+    default_cron = str(raw.get("default_cron", "0 6 * * *"))
+    if default_cron.strip():
+        _validate_cron_expression(default_cron, "schedule.default_cron")
     return ScheduleConfig(
-        default_cron=str(raw.get("default_cron", "0 6 * * *")),
+        default_cron=default_cron,
         timezone=str(raw.get("timezone", "Asia/Ho_Chi_Minh")),
         on_startup=_as_bool(raw.get("on_startup", False)),
     )
@@ -347,8 +350,12 @@ def _parse_crons(raw: dict[str, Any]) -> list[str]:
     """Parse multiple job schedules while preserving the legacy cron field."""
     crons = _parse_string_list(raw.get("crons", []), "files[].crons")
     if crons:
+        for index, cron in enumerate(crons):
+            _validate_cron_expression(cron, f"files[].crons[{index}]")
         return crons
     legacy_cron = str(raw.get("cron") or "").strip()
+    if legacy_cron:
+        _validate_cron_expression(legacy_cron, "files[].cron")
     return [legacy_cron] if legacy_cron else []
 
 
@@ -542,6 +549,23 @@ def _parse_string_mapping(value: Any, key: str) -> dict[str, str]:
         if source and target:
             result[source] = target
     return result
+
+
+def _validate_cron_expression(value: str, key: str) -> None:
+    """Validate a standard five-field cron expression."""
+    expression = str(value or "").strip()
+    if not expression:
+        return
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+    except ImportError:
+        if len(expression.split()) != 5:
+            raise ConfigError(f"{key} must be a five-field cron expression") from None
+        return
+    try:
+        CronTrigger.from_crontab(expression)
+    except ValueError as exc:
+        raise ConfigError(f"{key} is invalid: {expression}") from exc
 
 
 def _as_bool(value: Any) -> bool:

@@ -118,12 +118,14 @@ class SyncEngine:
     def list_jobs(self) -> list[dict[str, Any]]:
         """Return configured jobs enriched with latest sync log if available."""
         latest_logs = self._load_latest_logs()
+        job_health = self._load_job_health()
         jobs: list[dict[str, Any]] = []
         for file_config in self.config.files:
             table = normalize_identifier(file_config.target.table, "table")
             schema = normalize_identifier(file_config.target.schema or self.config.database.schema, "schema")
             table_name = f"{schema}.{table}"
             latest = latest_logs.get((file_config.name, table_name))
+            health = job_health.get((file_config.name, table_name), {})
             jobs.append(
                 {
                     "name": file_config.name,
@@ -135,6 +137,7 @@ class SyncEngine:
                     "crons": file_config.crons or ([file_config.cron] if file_config.cron else []),
                     "skip_unchanged": file_config.skip_unchanged,
                     "last_run": _json_safe_log(latest) if latest else None,
+                    "health": health,
                 }
             )
         return jobs
@@ -415,6 +418,41 @@ class SyncEngine:
             LOGGER.info("Could not load latest job logs for status view: %s", exc)
             return {}
 
+    def _load_job_health(self) -> dict[tuple[str, str], dict[str, Any]]:
+        """Compute lightweight per-job health metrics from recent sync_log rows."""
+        if not self.config.logging.log_to_db:
+            return {}
+        try:
+            self.db.ensure_sync_log_table()
+            rows = self.db.get_job_log_history()
+        except Exception as exc:
+            LOGGER.info("Could not load job health metrics: %s", exc)
+            return {}
+
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault((row["job_name"], row["table_name"]), []).append(row)
+
+        health: dict[tuple[str, str], dict[str, Any]] = {}
+        for key, history in grouped.items():
+            durations = [_duration_seconds(row) for row in history]
+            durations = [value for value in durations if value is not None]
+            success_rows = [row for row in history if row.get("status") == "success"]
+            failure_streak = 0
+            for row in history:
+                if row.get("status") == "failed":
+                    failure_streak += 1
+                    continue
+                break
+            health[key] = {
+                "last_duration_seconds": _duration_seconds(history[0]),
+                "avg_duration_seconds": round(sum(durations) / len(durations), 2) if durations else None,
+                "failure_streak": failure_streak,
+                "last_success_rows": success_rows[0].get("rows_imported") if success_rows else None,
+                "run_count": len(history),
+            }
+        return health
+
     @staticmethod
     def _result(
         file_config: SyncFileConfig,
@@ -465,6 +503,18 @@ def _cleanup_folder(path: Path, retention_days: int) -> None:
                 item.unlink()
         except OSError as exc:
             LOGGER.debug("Could not cleanup %s: %s", item, exc)
+
+
+def _duration_seconds(row: dict[str, Any]) -> float | None:
+    """Return a sync_log duration in seconds when both timestamps are present."""
+    started_at = row.get("started_at")
+    finished_at = row.get("finished_at")
+    if not started_at or not finished_at:
+        return None
+    try:
+        return max(0.0, round((finished_at - started_at).total_seconds(), 2))
+    except AttributeError:
+        return None
 
 
 def _json_safe_log(row: dict[str, Any] | None) -> dict[str, Any] | None:

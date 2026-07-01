@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity, AlertCircle, ChevronDown, Pencil, Play, RefreshCcw } from "lucide-react";
+import { Activity, AlertCircle, Pencil, Play, RefreshCcw } from "lucide-react";
 
 export const SYNC_API_URL = import.meta.env.VITE_SYNC_API_URL || "http://127.0.0.1:8765";
 
@@ -15,6 +15,23 @@ function formatSyncDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Không rõ";
   return formatDateTime(date);
+}
+
+function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined) return "-";
+  const value = Number(seconds);
+  if (!Number.isFinite(value)) return "-";
+  if (value < 60) return `${Math.round(value)}s`;
+  const minutes = Math.floor(value / 60);
+  const remaining = Math.round(value % 60);
+  if (minutes < 60) return `${minutes}m ${remaining}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function formatNextRun(value) {
+  if (!value) return "Chạy thủ công";
+  return formatSyncDate(value);
 }
 
 function syncStatusLabel(status) {
@@ -88,24 +105,12 @@ export default function SyncMonitor({ onEditJob }) {
   const [isOffline, setIsOffline] = useState(false);
   const [message, setMessage] = useState("");
   const [health, setHealth] = useState(null);
-  const [openRunDrop, setOpenRunDrop] = useState(null);
-  const [openAllDrop, setOpenAllDrop] = useState(false);
-  const allDropRef = useRef(null);
 
   const runningCount = jobs.filter((job) => job.running).length;
   const latestSuccess = logs.filter((row) => row.status === "success").length;
   const latestFailures = logs.filter((row) => row.status === "failed").length;
   const scheduler = health?.scheduler;
   const schedulerOffline = !isOffline && scheduler && !scheduler.running;
-
-  useEffect(() => {
-    function handleClick(event) {
-      if (allDropRef.current && !allDropRef.current.contains(event.target)) setOpenAllDrop(false);
-      setOpenRunDrop(null);
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -174,28 +179,10 @@ export default function SyncMonitor({ onEditJob }) {
             <RefreshCcw size={15} aria-hidden="true" />
             Tải lại
           </button>
-          <div className="splitBtn primary" ref={allDropRef} style={{ position: "relative" }}>
-            <button type="button" className="splitMain" onClick={() => triggerRunAll(false)}>
-              <Play size={15} aria-hidden="true" />
-              Đồng bộ tất cả
-            </button>
-            <button
-              type="button"
-              className="splitArrow"
-              aria-label="Thêm tùy chọn đồng bộ"
-              onClick={() => setOpenAllDrop((value) => !value)}
-            >
-              <ChevronDown size={13} aria-hidden="true" />
-            </button>
-            {openAllDrop && (
-              <div className="dropdown">
-                <button type="button" onClick={() => { triggerRunAll(true); setOpenAllDrop(false); }}>
-                  <Play size={14} aria-hidden="true" />
-                  Bắt buộc đồng bộ lại
-                </button>
-              </div>
-            )}
-          </div>
+          <button type="button" className="btn primary" onClick={() => triggerRunAll(false)}>
+            <Play size={15} aria-hidden="true" />
+            Đồng bộ tất cả
+          </button>
         </div>
       </header>
 
@@ -252,6 +239,7 @@ export default function SyncMonitor({ onEditJob }) {
               <th>Lịch chạy</th>
               <th>Trạng thái</th>
               <th>Số dòng</th>
+              <th>Sức khỏe</th>
               <th>Hoàn tất lúc</th>
               <th>Thao tác</th>
             </tr>
@@ -259,13 +247,13 @@ export default function SyncMonitor({ onEditJob }) {
           <tbody>
             {jobs.length === 0 && (
               <tr>
-                <td colSpan="8">{isLoading ? "Đang tải..." : "Chưa có tác vụ nào được cấu hình."}</td>
+                <td colSpan="9">{isLoading ? "Đang tải..." : "Chưa có tác vụ nào được cấu hình."}</td>
               </tr>
             )}
             {jobs.map((job) => {
               const latest = job.last_run || {};
+              const health = job.health || {};
               const statusClass = job.running ? "running" : (latest.status || "idle");
-              const isDropOpen = openRunDrop === job.name;
               return (
                 <tr key={job.name} className={`jobRow ${statusClass}`}>
                   <td>
@@ -274,7 +262,12 @@ export default function SyncMonitor({ onEditJob }) {
                   </td>
                   <td>{job.source_type}</td>
                   <td>{job.table}</td>
-                  <td>{cronLabel(job)}</td>
+                  <td>
+                    <div className="stackedCell">
+                      <span>{cronLabel(job)}</span>
+                      <small>Tiếp: {formatNextRun(job.next_run_time)}</small>
+                    </div>
+                  </td>
                   <td>
                     <span className={`statusPill ${statusClass}`}>
                       {job.running
@@ -283,42 +276,35 @@ export default function SyncMonitor({ onEditJob }) {
                     </span>
                   </td>
                   <td>{latest.rows_imported ?? 0}</td>
+                  <td>
+                    <div className="healthCell">
+                      <span>Cuối: {formatDuration(health.last_duration_seconds)}</span>
+                      <span>TB: {formatDuration(health.avg_duration_seconds)}</span>
+                      <span className={health.failure_streak > 0 ? "dangerText" : ""}>Lỗi liên tiếp: {health.failure_streak || 0}</span>
+                    </div>
+                  </td>
                   <td>{formatSyncDate(latest.finished_at)}</td>
                   <td>
                     <div className="rowActions">
-                      <div className="splitBtn" style={{ position: "relative" }}>
-                        <button
-                          type="button"
-                          className="splitMain"
-                          disabled={job.running}
-                          onClick={() => triggerRunJob(job.name, false)}
-                        >
-                          <Play size={13} aria-hidden="true" />
-                          Chạy
-                        </button>
-                        <button
-                          type="button"
-                          className="splitArrow"
-                          disabled={job.running}
-                          aria-label="Thêm tùy chọn chạy"
-                          onMouseDown={(event) => event.stopPropagation()}
-                          onClick={() => setOpenRunDrop(isDropOpen ? null : job.name)}
-                        >
-                          <ChevronDown size={12} aria-hidden="true" />
-                        </button>
-                        {isDropOpen && (
-                          <div className="dropdown">
-                            <button
-                              type="button"
-                              onMouseDown={(event) => event.stopPropagation()}
-                              onClick={() => { triggerRunJob(job.name, true); setOpenRunDrop(null); }}
-                            >
-                              <Play size={13} aria-hidden="true" />
-                              Bắt buộc đồng bộ lại
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={job.running}
+                        onClick={() => triggerRunJob(job.name, false)}
+                      >
+                        <Play size={13} aria-hidden="true" />
+                        Chạy
+                      </button>
+                      <button
+                        type="button"
+                        className="iconOnly"
+                        disabled={job.running}
+                        title="Bắt buộc đồng bộ lại"
+                        aria-label={`Bắt buộc đồng bộ lại ${job.name}`}
+                        onClick={() => triggerRunJob(job.name, true)}
+                      >
+                        <RefreshCcw size={14} aria-hidden="true" />
+                      </button>
                       <button type="button" onClick={() => onEditJob?.(job.name)} title="Chỉnh sửa tác vụ">
                         <Pencil size={13} aria-hidden="true" />
                         Sửa

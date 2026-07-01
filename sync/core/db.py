@@ -223,6 +223,23 @@ class PostgresClient:
                 rows = [_log_row_to_dict(row) for row in cursor.fetchall()]
                 return {(row["job_name"], row["table_name"]): row for row in rows}
 
+    def get_job_log_history(self, limit: int = 1000) -> list[dict[str, Any]]:
+        """Return recent rows used to compute per-job health metrics."""
+        bounded_limit = max(1, min(int(limit), 5000))
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT id, job_name, table_name, started_at, finished_at, status,
+                           rows_imported, file_hash, file_path, error_message, details
+                    FROM {qualified_name(self.config.schema, "sync_log")}
+                    ORDER BY started_at DESC, id DESC
+                    LIMIT %s
+                    """,
+                    (bounded_limit,),
+                )
+                return [_log_row_to_dict(row) for row in cursor.fetchall()]
+
     def cleanup_sync_log(self, retention_days: int) -> int:
         """Delete old sync_log rows and return the number of deleted rows."""
         with self.connection() as connection:

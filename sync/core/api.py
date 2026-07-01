@@ -95,7 +95,7 @@ class ApiJobRunner:
         return True
 
 
-def create_app(config: AppConfig, runtime_status: Any | None = None) -> Any:
+def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_control: Any | None = None) -> Any:
     """Create the FastAPI app."""
     try:
         from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -370,8 +370,16 @@ def create_app(config: AppConfig, runtime_status: Any | None = None) -> Any:
             table_exists = db_client.table_exists(schema, table)
             db_columns = db_client.get_columns(schema, table) if table_exists else None
             compare_result = compare_columns(list(dataframe.columns), db_columns)
+            source_schema = infer_dataframe_schema(dataframe)
             if file_config.sync_mode == "upsert":
                 validate_upsert_dataframe(dataframe, primary_key)
+            diff = _dry_run_diff(
+                source_schema,
+                db_columns,
+                rows_to_import=read_result.row_count,
+                sync_mode=file_config.sync_mode,
+                mismatch_policy=file_config.on_column_mismatch,
+            )
             return {
                 "status": "ok",
                 "job": file_config.name,
@@ -379,13 +387,16 @@ def create_app(config: AppConfig, runtime_status: Any | None = None) -> Any:
                 "source_path": str(read_result.file_path),
                 "hash": read_result.file_hash,
                 "rows": read_result.row_count,
+                "rows_to_import": read_result.row_count,
                 "sampled": True,
                 "sample_limit": sample_limit,
-                "columns": infer_dataframe_schema(dataframe),
+                "columns": source_schema,
                 "table_exists": table_exists,
-                "schema_match": compare_result.match,
+                "schema_match": compare_result.match and not diff["type_mismatches"],
                 "missing_in_db": compare_result.missing_in_db,
                 "extra_in_db": compare_result.extra_in_db,
+                "type_mismatches": diff["type_mismatches"],
+                "diff": diff,
                 "message": "Dry run OK on a sample. No rows were imported.",
             }
         finally:
@@ -494,7 +505,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None) -> Any:
             preview_result_cache[cache_key] = dict(result)
         return result
 
-    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.3")
+    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.4")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.api.cors_origins,
@@ -520,6 +531,14 @@ def create_app(config: AppConfig, runtime_status: Any | None = None) -> Any:
             "running": sorted(runner.running_names()),
             "scheduler": scheduler_status,
         }
+
+    @app.post("/api/runtime/scheduler/{action}")
+    def scheduler_control(action: str) -> dict[str, Any]:
+        if not callable(runtime_control):
+            raise HTTPException(status_code=400, detail="Scheduler control is not available for this runtime")
+        if action not in {"pause", "resume"}:
+            raise HTTPException(status_code=400, detail="action must be pause or resume")
+        return runtime_control(action)
 
     @app.get("/api/config")
     def get_config() -> dict[str, Any]:
@@ -764,9 +783,19 @@ def create_app(config: AppConfig, runtime_status: Any | None = None) -> Any:
         items = engine.list_jobs()
         running = runner.running_names()
         progress = runner.progress_snapshot()
+        scheduler_status = runtime_status() if callable(runtime_status) else {}
+        next_runs_by_name: dict[str, list[str]] = {}
+        for row in scheduler_status.get("next_runs", []):
+            name = row.get("name")
+            next_run_time = row.get("next_run_time")
+            if name and next_run_time:
+                next_runs_by_name.setdefault(name, []).append(next_run_time)
         for item in items:
             item["running"] = item["name"] in running or "__all__" in running
             item["progress"] = progress.get(item["name"])
+            item_next_runs = sorted(next_runs_by_name.get(item["name"], []))
+            item["next_run_time"] = item_next_runs[0] if item_next_runs else None
+            item["next_runs"] = item_next_runs
         return {"jobs": items}
 
     @app.get("/api/logs")
@@ -822,6 +851,89 @@ def _resolve_configured_dir(base_dir: Path, value: str) -> Path:
     if path.is_absolute():
         return path
     return base_dir / path
+
+
+def _dry_run_diff(
+    source_schema: list[dict[str, Any]],
+    db_columns: list[Any] | None,
+    *,
+    rows_to_import: int,
+    sync_mode: str,
+    mismatch_policy: str,
+) -> dict[str, Any]:
+    """Build a compact import diff for the dashboard."""
+    source_names = [str(column["name"]) for column in source_schema]
+    db_names = [column.name for column in db_columns or []]
+    db_type_by_name = {column.name: column.data_type for column in db_columns or []}
+    source_type_by_name = {str(column["name"]): str(column["postgres_type"]) for column in source_schema}
+    source_set = set(source_names)
+    db_set = set(db_names)
+    columns_new = sorted(source_set - db_set)
+    columns_missing = sorted(db_set - source_set)
+    type_mismatches = []
+    for name in sorted(source_set & db_set):
+        source_type = source_type_by_name.get(name, "TEXT")
+        db_type = db_type_by_name.get(name, "text")
+        if not _pg_types_compatible(source_type, db_type):
+            type_mismatches.append(
+                {
+                    "column": name,
+                    "source_type": source_type,
+                    "db_type": db_type,
+                }
+            )
+
+    will_create_table = not db_columns
+    has_schema_diff = bool(columns_new or columns_missing or type_mismatches)
+    if will_create_table:
+        action = "create_table"
+    elif has_schema_diff and mismatch_policy == "auto_recreate":
+        action = "recreate_table"
+    elif has_schema_diff:
+        action = "skip_import"
+    elif sync_mode == "append":
+        action = "append"
+    elif sync_mode == "upsert":
+        action = "upsert"
+    elif sync_mode == "drop_recreate":
+        action = "recreate_table"
+    else:
+        action = "truncate_insert"
+
+    return {
+        "rows_to_import": rows_to_import,
+        "source_column_count": len(source_names),
+        "db_column_count": len(db_names),
+        "columns_new": columns_new,
+        "columns_missing": columns_missing,
+        "type_mismatches": type_mismatches,
+        "will_create_table": will_create_table,
+        "has_schema_diff": has_schema_diff,
+        "action": action,
+    }
+
+
+def _pg_types_compatible(source_type: str, db_type: str) -> bool:
+    """Return whether source and DB column types are broadly compatible."""
+    source_group = _pg_type_group(source_type)
+    db_group = _pg_type_group(db_type)
+    if source_group == "text" or db_group == "text":
+        return True
+    return source_group == db_group
+
+
+def _pg_type_group(type_name: str) -> str:
+    """Collapse PostgreSQL type aliases into coarse groups for dry-run diff."""
+    normalized = str(type_name).lower()
+    if normalized in {"bigint", "integer", "smallint", "serial", "bigserial"}:
+        return "integer"
+    if normalized in {"double precision", "real", "numeric", "decimal"}:
+        return "float"
+    if normalized in {"boolean", "bool"}:
+        return "boolean"
+    if normalized.startswith("timestamp") or normalized in {"date", "time without time zone"}:
+        return "datetime"
+    return "text"
 
 
 def _safe_extract_bundle(archive: zipfile.ZipFile, target_dir: Path) -> None:

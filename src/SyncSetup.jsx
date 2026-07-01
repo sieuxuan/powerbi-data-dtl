@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertCircle,
   Archive,
   Bell,
   ChevronLeft,
   ChevronRight,
-  CheckCircle2,
   Clock3,
   Copy,
   Database,
@@ -24,6 +22,7 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { SYNC_API_URL, syncApi } from "./SyncMonitor.jsx";
+import { ConfigActions, DryRunDiffPanel, SetupNoticeToast, UpdateSection } from "./SyncSetupUi.jsx";
 
 const DEFAULT_CONFIG = {
   database: {
@@ -46,7 +45,7 @@ const DEFAULT_CONFIG = {
   updates: {
     enabled: false,
     repo: "",
-    current_version: "1.0.3",
+    current_version: "1.0.4",
     asset_pattern: "PowerBIDataDTL-portable.zip",
     check_on_startup: true,
     auto_download: false,
@@ -98,6 +97,9 @@ const DEFAULT_CONFIG = {
     log_to_db: true,
   },
 };
+
+const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+const CRON_VALUE_PATTERN = /^(\*|\?|\d{1,4}|\d{1,4}-\d{1,4}|\d{1,4}\/\d{1,4}|\*\/\d{1,4}|\d{1,4}-\d{1,4}\/\d{1,4})(,(\*|\?|\d{1,4}|\d{1,4}-\d{1,4}|\d{1,4}\/\d{1,4}|\*\/\d{1,4}|\d{1,4}-\d{1,4}\/\d{1,4}))*$/;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -171,6 +173,78 @@ function normalizeFile(file, index, schema = "public") {
     cron: file?.cron ?? null,
     crons: normalizeCronList(file?.crons, file?.cron),
   };
+}
+
+function validateSyncConfig(config) {
+  const jobs = (config?.files || []).map((file, index) => validateJobConfig(file, index));
+  const errors = [];
+  if (!String(config?.database?.host || "").trim()) errors.push("Thiếu database host.");
+  if (!String(config?.database?.name || "").trim()) errors.push("Thiếu database name.");
+  if (!String(config?.database?.user || "").trim()) errors.push("Thiếu database user.");
+  const invalidJobs = jobs.filter((job) => job.messages.length).length;
+  return {
+    errors,
+    jobs,
+    count: errors.length + jobs.reduce((total, job) => total + job.messages.length, 0),
+    hasErrors: Boolean(errors.length || invalidJobs),
+  };
+}
+
+function validateJobConfig(file, index = 0) {
+  const messages = [];
+  const fields = {};
+  const source = file?.source || {};
+  const target = file?.target || {};
+  const sourceType = source.type === "onedrive" ? "onedrive" : "local";
+  const table = String(target.table || "").trim();
+  const schema = String(target.schema || "").trim();
+  const crons = normalizeCronList(file?.crons, file?.cron);
+
+  if (!String(file?.name || "").trim()) {
+    fields.name = "Tên job không được để trống.";
+    messages.push(fields.name);
+  }
+  if (sourceType === "local" && !String(source.path || "").trim()) {
+    fields.source = "Thiếu đường dẫn file local.";
+    messages.push(fields.source);
+  }
+  if (sourceType === "onedrive" && !String(source.share_url || source.download_url || "").trim()) {
+    fields.source = "Thiếu link SharePoint/OneDrive hoặc direct download URL.";
+    messages.push(fields.source);
+  }
+  if (!table) {
+    fields.table = "Thiếu bảng đích.";
+    messages.push(fields.table);
+  } else if (!IDENTIFIER_PATTERN.test(table)) {
+    fields.table = "Tên bảng chỉ dùng chữ, số, dấu gạch dưới và không bắt đầu bằng số.";
+    messages.push(fields.table);
+  }
+  if (schema && !IDENTIFIER_PATTERN.test(schema)) {
+    fields.schema = "Schema chỉ dùng chữ, số, dấu gạch dưới và không bắt đầu bằng số.";
+    messages.push(fields.schema);
+  }
+  const invalidCron = crons.find((cron) => !isValidCron(cron));
+  if (invalidCron) {
+    fields.cron = `Cron sai định dạng: ${invalidCron}`;
+    messages.push(fields.cron);
+  }
+  if (file?.sync_mode === "upsert" && !asStringList(target.primary_key).length) {
+    fields.primary_key = "Upsert cần primary key.";
+    messages.push(fields.primary_key);
+  }
+
+  return {
+    index,
+    fields,
+    messages,
+  };
+}
+
+function isValidCron(value) {
+  const cron = String(value || "").trim();
+  if (!cron) return true;
+  const parts = cron.split(/\s+/);
+  return parts.length === 5 && parts.every((part) => CRON_VALUE_PATTERN.test(part));
 }
 
 function parseCsvList(value) {
@@ -430,7 +504,7 @@ function CronListEditor({ label, value, onChange }) {
       </div>
       {crons.length === 0 && <small>Chưa đặt lịch. Job chỉ chạy thủ công.</small>}
       {crons.map((cron, index) => (
-        <div className="cronListRow" key={`${cron}-${index}`}>
+        <div className="cronListRow" key={`cron-${index}`}>
           <CronEditor label={`Lịch ${index + 1}`} value={cron} onChange={(nextValue) => patchCron(index, nextValue)} />
           <button type="button" className="iconButton danger" title="Xóa lịch" onClick={() => removeCron(index)}>
             <Trash2 size={15} aria-hidden="true" />
@@ -478,10 +552,14 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   const [pendingBundle, setPendingBundle] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
   const handledFocusTokenRef = useRef(null);
+  const updateAutoCheckRef = useRef("");
+  const noticeTimerRef = useRef(null);
   const enabledJobs = useMemo(
     () => (configData?.files || []).filter((file) => file.enabled).length,
     [configData],
   );
+  const validation = useMemo(() => validateSyncConfig(configData), [configData]);
+  const wizardValidation = useMemo(() => validateJobConfig(wizardJob || {}, 0), [wizardJob]);
   const setupTab = controlledSetupTab || localSetupTab;
 
   function setSetupTab(tab) {
@@ -501,6 +579,22 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   }, [notice]);
 
   useEffect(() => {
+    const noticeText = error || message;
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    if (!noticeText) return undefined;
+    noticeTimerRef.current = window.setTimeout(() => {
+      if (error) {
+        setError("");
+      } else {
+        setMessage("");
+      }
+    }, error ? 6500 : 4200);
+    return () => {
+      if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    };
+  }, [error, message]);
+
+  useEffect(() => {
     if (!configData?.files?.length || !focusJobName) return;
     if (handledFocusTokenRef.current === focusToken) return;
     const index = configData.files.findIndex((file) => file.name === focusJobName);
@@ -512,6 +606,24 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
       setMessage(`Đang sửa job ${focusJobName}.`);
     }
   }, [configData, focusJobName, focusToken]);
+
+  useEffect(() => {
+    if (setupTab !== "system" || !configData?.updates?.enabled) return;
+    const updateKey = [
+      configData.updates.repo || "",
+      configData.updates.current_version || "",
+      configData.updates.asset_pattern || "",
+    ].join("|");
+    if (updateAutoCheckRef.current === updateKey) return;
+    updateAutoCheckRef.current = updateKey;
+    checkUpdate("check", { silent: true });
+  }, [
+    setupTab,
+    configData?.updates?.enabled,
+    configData?.updates?.repo,
+    configData?.updates?.current_version,
+    configData?.updates?.asset_pattern,
+  ]);
 
   async function loadConfig() {
     setIsLoading(true);
@@ -536,6 +648,16 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   }
 
   async function persistConfig(nextConfig, successMessage = "Đã lưu cấu hình.") {
+    const validationResult = validateSyncConfig(nextConfig);
+    if (validationResult.hasErrors) {
+      const firstJobError = validationResult.jobs.find((job) => job.messages.length);
+      if (firstJobError) {
+        setSetupTab("jobs");
+        setEditingJobIndex(firstJobError.index);
+      }
+      setError(`Chưa thể lưu: còn ${validationResult.count} lỗi cấu hình cần sửa.`);
+      throw new Error("Config validation failed");
+    }
     setIsSaving(true);
     setError("");
     try {
@@ -679,8 +801,9 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
     }
   }
 
-  async function checkUpdate(action = "check") {
+  async function checkUpdate(action = "check", options = {}) {
     if (!configData) return;
+    const silent = Boolean(options.silent);
     const setBusy = action === "apply" ? setIsApplyingUpdate : action === "download" ? setIsDownloadingUpdate : setIsCheckingUpdate;
     setBusy(true);
     setError("");
@@ -694,15 +817,26 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
       if (action === "apply") {
         setMessage(result.message || "Đang áp dụng bản cập nhật. Ứng dụng sẽ tự mở lại.");
       } else if (action === "download") {
-        setMessage(result.downloaded_path ? `Đã tải bản cập nhật vào ${result.downloaded_path}.` : "Không có bản mới để tải.");
-      } else {
+        setMessage(result.downloaded_path ? `Bản cập nhật đã sẵn sàng tại ${result.downloaded_path}.` : "Không có bản mới để tải.");
+      } else if (!silent || result.update_available) {
         setMessage(result.update_available ? `Có bản mới ${result.latest_version}.` : "Đang dùng bản mới nhất.");
       }
     } catch (updateError) {
-      setError(`Kiểm tra cập nhật lỗi: ${updateError.message}`);
+      setUpdateInfo({
+        configured: Boolean(configData?.updates?.enabled),
+        update_available: false,
+        current_version: configData?.updates?.current_version || "",
+        message: updateError.message,
+        error: true,
+      });
+      if (!silent) setError(`Kiểm tra cập nhật lỗi: ${updateError.message}`);
     } finally {
       setBusy(false);
     }
+  }
+
+  function runUpdatePrimaryAction() {
+    checkUpdate("apply");
   }
 
   async function uploadJobFile(index, file) {
@@ -1077,49 +1211,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
 
   return (
     <>
-      <header className="topbar">
-        <div className="actions">
-          <button type="button" onClick={loadConfig} disabled={isLoading}>
-            <RefreshCcw size={17} aria-hidden="true" />
-            Tải lại
-          </button>
-          <button type="button" className="primary" onClick={saveConfig} disabled={!configData || isSaving}>
-            <Save size={17} aria-hidden="true" />
-            {isSaving ? "Đang lưu" : "Lưu"}
-          </button>
-        </div>
-      </header>
-
-      {error && (
-        <div className="syncBanner error">
-          <AlertCircle size={18} aria-hidden="true" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {message && !error && (
-        <div className="syncBanner">
-          <CheckCircle2 size={18} aria-hidden="true" />
-          <span>{message}</span>
-        </div>
-      )}
-
-      {isDirty && !error && (
-        <div className="syncBanner warning">
-          <AlertCircle size={18} aria-hidden="true" />
-          <span>Có thay đổi chưa được lưu. Bấm "Lưu" trước khi chạy đồng bộ hoặc chuyển máy.</span>
-        </div>
-      )}
-
-      {configData && isDirty && (
-        <div className="localSaveBar">
-          <span>Đang có thay đổi chưa lưu.</span>
-          <button type="button" className="primary" onClick={saveConfig} disabled={isSaving}>
-            <Save size={16} aria-hidden="true" />
-            {isSaving ? "Đang lưu" : "Lưu"}
-          </button>
-        </div>
-      )}
+      <SetupNoticeToast error={error} message={message} />
 
       {configData && (
         <div className="setupLayout">
@@ -1174,6 +1266,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       <label>
                         Link share
                         <input value={wizardJob.source?.share_url || ""} placeholder="https://...sharepoint.com/..." onChange={(event) => patchWizardNested("source", { share_url: event.target.value })} />
+                        {wizardValidation.fields.source && <small className="fieldError">{wizardValidation.fields.source}</small>}
                       </label>
                       <label>
                         Direct download URL
@@ -1190,6 +1283,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       <label>
                         Đường dẫn file
                         <input value={wizardJob.source?.path || ""} placeholder="./uploads/report.xlsx hoặc D:/Data/report.xlsx" onChange={(event) => patchWizardNested("source", { path: event.target.value })} />
+                        {wizardValidation.fields.source && <small className="fieldError">{wizardValidation.fields.source}</small>}
                       </label>
                     </div>
                   )}
@@ -1305,14 +1399,17 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     <label>
                       Tên job
                       <input value={wizardJob.name || ""} onChange={(event) => patchWizardJob({ name: event.target.value })} />
+                      {wizardValidation.fields.name && <small className="fieldError">{wizardValidation.fields.name}</small>}
                     </label>
                     <label>
                       Schema đích
                       <input value={wizardJob.target?.schema || ""} onChange={(event) => patchWizardNested("target", { schema: event.target.value })} />
+                      {wizardValidation.fields.schema && <small className="fieldError">{wizardValidation.fields.schema}</small>}
                     </label>
                     <label>
                       Bảng đích
                       <input value={wizardJob.target?.table || ""} onChange={(event) => patchWizardNested("target", { table: event.target.value })} />
+                      {wizardValidation.fields.table && <small className="fieldError">{wizardValidation.fields.table}</small>}
                     </label>
                     <label>
                       Chế độ sync
@@ -1326,12 +1423,14 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     <label>
                       Primary key
                       <input value={formatList(wizardJob.target?.primary_key)} onChange={(event) => patchWizardNested("target", { primary_key: parseCsvList(event.target.value) })} />
+                      {wizardValidation.fields.primary_key && <small className="fieldError">{wizardValidation.fields.primary_key}</small>}
                     </label>
                     <CronListEditor
                       label="Lịch riêng"
                       value={wizardJob.crons}
                       onChange={(value) => patchWizardJob({ crons: value, cron: value[0] || null })}
                     />
+                    {wizardValidation.fields.cron && <small className="fieldError">{wizardValidation.fields.cron}</small>}
                   </div>
                   {wizardPreview?.sheets?.length > 0 && (
                     <div className="columnMappingPanel">
@@ -1366,19 +1465,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     </div>
                   )}
                   {wizardDryRun?.columns?.length > 0 && (
-                    <div className="typePreviewPanel">
-                      <strong>Dry run report</strong>
-                      <small>Target: {wizardDryRun.target} · Rows: {wizardDryRun.rows} · Schema: {wizardDryRun.schema_match ? "khớp" : wizardDryRun.table_exists ? "chưa khớp" : "sẽ tạo mới"}</small>
-                      <div className="typePreviewGrid">
-                        {wizardDryRun.columns.slice(0, 12).map((column) => (
-                          <div className="typePreviewItem" key={column.name}>
-                            <span>{column.name}</span>
-                            <b>{column.postgres_type}</b>
-                            <small>{column.nullable ? "nullable" : "not null"} · {column.pandas_type}</small>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    <DryRunDiffPanel result={wizardDryRun} />
                   )}
                   <div className="wizardActions">
                     <button type="button" className="secondaryButton" onClick={() => testWritePermission(wizardJob.target?.schema || configData.database.schema)} disabled={isTestingWrite}>
@@ -1393,7 +1480,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       <ChevronLeft size={16} aria-hidden="true" />
                       Quay lại
                     </button>
-                    <button type="button" className="primary" onClick={saveWizardJob} disabled={isSaving}>
+                    <button type="button" className="primary" onClick={saveWizardJob} disabled={isSaving || Boolean(wizardValidation.messages.length)}>
                       <Save size={16} aria-hidden="true" />
                       Lưu job
                     </button>
@@ -1411,18 +1498,26 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                 <Database size={18} aria-hidden="true" />
                 <h3>PostgreSQL</h3>
               </div>
-              <button type="button" className="secondaryButton" onClick={testDatabase} disabled={isTestingDb}>
-                <Play size={16} aria-hidden="true" />
-                {isTestingDb ? "Đang test" : "Test kết nối"}
-              </button>
-              <button type="button" className="secondaryButton" onClick={() => testWritePermission()} disabled={isTestingWrite}>
-                <Play size={16} aria-hidden="true" />
-                {isTestingWrite ? "Đang test ghi" : "Test quyền ghi"}
-              </button>
-              <button type="button" className="secondaryButton" onClick={saveConfig} disabled={!configData || isSaving}>
-                <Save size={16} aria-hidden="true" />
-                Lưu
-              </button>
+              <ConfigActions
+                isDirty={isDirty}
+                isLoading={isLoading}
+                isSaving={isSaving}
+                canSave={Boolean(configData) && !validation.hasErrors}
+                onReload={loadConfig}
+                onSave={saveConfig}
+                leading={(
+                  <>
+                    <button type="button" className="secondaryButton" onClick={testDatabase} disabled={isTestingDb}>
+                      <Play size={16} aria-hidden="true" />
+                      {isTestingDb ? "Đang test" : "Test kết nối"}
+                    </button>
+                    <button type="button" className="secondaryButton" onClick={() => testWritePermission()} disabled={isTestingWrite}>
+                      <Play size={16} aria-hidden="true" />
+                      {isTestingWrite ? "Đang test ghi" : "Test quyền ghi"}
+                    </button>
+                  </>
+                )}
+              />
             </div>
             <div className="setupGrid">
               <label>
@@ -1462,10 +1557,20 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                 <Link2 size={18} aria-hidden="true" />
                 <h3>File Sync Jobs</h3>
               </div>
-              <button type="button" className="secondaryButton" onClick={addJob}>
-                <Plus size={16} aria-hidden="true" />
-                Thêm job
-              </button>
+              <ConfigActions
+                isDirty={isDirty}
+                isLoading={isLoading}
+                isSaving={isSaving}
+                canSave={Boolean(configData) && !validation.hasErrors}
+                onReload={loadConfig}
+                onSave={saveConfig}
+                trailing={(
+                  <button type="button" className="secondaryButton" onClick={addJob}>
+                    <Plus size={16} aria-hidden="true" />
+                    Thêm job
+                  </button>
+                )}
+              />
             </div>
 
             {configData.files.length === 0 && <p className="emptyText">Chưa có job nào. Bấm Thêm job để cấu hình file đầu tiên.</p>}
@@ -1474,6 +1579,8 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
               const sourceMode = file.source?.type === "onedrive" ? "sharepoint" : "local";
               const isEditing = editingJobIndex === index;
               const scheduleOnly = isEditing && editingJobMode === "schedule";
+              const jobErrors = validation.jobs[index]?.fields || {};
+              const jobErrorMessages = validation.jobs[index]?.messages || [];
               return (
                 <article className={`jobEditor ${isEditing ? "editing" : "compact"}`} key={`job-${index}`}>
                   <div className="jobCompactHeader">
@@ -1497,6 +1604,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                         <>
                           <span>{sourceLabel(file)} · {file.target?.schema || configData.database.schema}.{file.target?.table || "new_table"}</span>
                           <small>{sourcePathLabel(file)}</small>
+                          {jobErrorMessages.length > 0 && <small className="fieldError">{jobErrorMessages[0]}</small>}
                         </>
                       )}
                     </div>
@@ -1526,7 +1634,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                         </>
                       )}
                       {isEditing && (
-                        <button type="button" className="primary" onClick={saveConfig} disabled={isSaving}>
+                        <button type="button" className="primary" onClick={saveConfig} disabled={isSaving || validation.hasErrors}>
                           <Save size={15} aria-hidden="true" />
                           {isSaving ? "Đang lưu" : "Lưu"}
                         </button>
@@ -1551,29 +1659,18 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                         {jobFeedback[index].text}
                       </div>
                       {jobFeedback[index].dryRun?.columns?.length > 0 && (
-                        <div className="typePreviewPanel">
-                          <strong>Preview kiểu dữ liệu PostgreSQL</strong>
-                          <div className="typePreviewGrid">
-                            {jobFeedback[index].dryRun.columns.slice(0, 16).map((column) => (
-                              <div className="typePreviewItem" key={column.name}>
-                                <span>{column.name}</span>
-                                <b>{column.postgres_type}</b>
-                                <small>{column.nullable ? "nullable" : "not null"} · {column.pandas_type}</small>
-                              </div>
-                            ))}
-                          </div>
-                          {!jobFeedback[index].dryRun.schema_match && jobFeedback[index].dryRun.table_exists && (
-                            <small className="errorText">
-                              Thiếu trong DB: {(jobFeedback[index].dryRun.missing_in_db || []).join(", ") || "-"} · Dư trong DB: {(jobFeedback[index].dryRun.extra_in_db || []).join(", ") || "-"}
-                            </small>
-                          )}
-                        </div>
+                        <DryRunDiffPanel result={jobFeedback[index].dryRun} />
                       )}
                     </>
                   )}
 
                   {isEditing && (
                     <>
+                  {jobErrorMessages.length > 0 && (
+                    <div className="validationPanel">
+                      {jobErrorMessages.map((item) => <span key={item}>{item}</span>)}
+                    </div>
+                  )}
                   {!scheduleOnly && (
                     <>
                   <div className="jobSourcePanel">
@@ -1602,6 +1699,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                         <label>
                           Đường dẫn file
                           <input value={file.source?.path || ""} placeholder="./uploads/report.xlsx hoặc D:/Data/report.xlsx" onChange={(event) => patchJobNested(index, "source", { path: event.target.value })} />
+                          {jobErrors.source && <small className="fieldError">{jobErrors.source}</small>}
                         </label>
                         <button type="button" className="secondaryButton" onClick={() => testJobFile(index)} disabled={testingFileIndex === index}>
                           <Play size={16} aria-hidden="true" />
@@ -1617,6 +1715,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                         <label>
                           Link share SharePoint/OneDrive
                           <input value={file.source?.share_url || ""} placeholder="https://...sharepoint.com/..." onChange={(event) => patchJobNested(index, "source", { share_url: event.target.value })} />
+                          {jobErrors.source && <small className="fieldError">{jobErrors.source}</small>}
                         </label>
                         <label>
                           Direct download URL
@@ -1640,10 +1739,12 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       <label>
                         Schema đích
                         <input value={file.target?.schema || ""} onChange={(event) => patchJobNested(index, "target", { schema: event.target.value })} />
+                        {jobErrors.schema && <small className="fieldError">{jobErrors.schema}</small>}
                       </label>
                       <label>
                         Bảng đích
                         <input value={file.target?.table || ""} onChange={(event) => patchJobNested(index, "target", { table: event.target.value })} />
+                        {jobErrors.table && <small className="fieldError">{jobErrors.table}</small>}
                       </label>
                       <label>
                         Chế độ sync
@@ -1657,6 +1758,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       <label>
                         Primary key
                         <input value={formatList(file.target?.primary_key)} placeholder="id, code" onChange={(event) => patchJobNested(index, "target", { primary_key: parseCsvList(event.target.value) })} />
+                        {jobErrors.primary_key && <small className="fieldError">{jobErrors.primary_key}</small>}
                       </label>
                       <label>
                         Khi lệch schema
@@ -1683,6 +1785,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       value={file.crons}
                       onChange={(value) => patchJob(index, { crons: value, cron: value[0] || null })}
                     />
+                    {jobErrors.cron && <small className="fieldError">{jobErrors.cron}</small>}
                   </div>
 
                   {!scheduleOnly && (
@@ -1769,43 +1872,20 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
             </div>
           </section>
 
-          <section className="setupSection">
-            <div className="sectionTitle withAction">
-              <div>
-                <RefreshCcw size={18} aria-hidden="true" />
-                <h3>Cập nhật phần mềm</h3>
-              </div>
-              <button type="button" className="secondaryButton" onClick={() => checkUpdate("check")} disabled={isCheckingUpdate}>
-                <Eye size={16} aria-hidden="true" />
-                {isCheckingUpdate ? "Đang kiểm tra" : "Kiểm tra"}
-              </button>
-              <button type="button" className="secondaryButton" onClick={() => checkUpdate("download")} disabled={isDownloadingUpdate}>
-                <Download size={16} aria-hidden="true" />
-                {isDownloadingUpdate ? "Đang tải" : "Tải bản mới"}
-              </button>
-              <button type="button" className="secondaryButton" onClick={() => checkUpdate("apply")} disabled={isApplyingUpdate}>
-                <RefreshCcw size={16} aria-hidden="true" />
-                {isApplyingUpdate ? "Đang cập nhật" : "Cập nhật & mở lại"}
-              </button>
-            </div>
-            <div className="setupGrid">
-              <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.updates.enabled)} onChange={(event) => patchSection("updates", { enabled: event.target.checked })} />
-                Tự kiểm tra bản mới
-              </label>
-              <label className="checkField">
-                <input type="checkbox" checked={Boolean(configData.updates.auto_apply)} onChange={(event) => patchSection("updates", { auto_apply: event.target.checked, auto_download: event.target.checked })} />
-                Tự cài khi có bản mới
-              </label>
-            </div>
-            {updateInfo && (
-              <div className={`testResult ${updateInfo.update_available ? "info" : "success"}`}>
-                <strong>{updateInfo.update_available ? `Có bản ${updateInfo.latest_version}` : `Đang ở bản ${updateInfo.current_version}`}</strong>
-                {updateInfo.release_url && <span> · {updateInfo.release_url}</span>}
-                {updateInfo.downloaded_path && <span> · Đã tải: {updateInfo.downloaded_path}</span>}
-              </div>
-            )}
-          </section>
+          <UpdateSection
+            updateConfig={{
+              enabled: configData.updates.enabled,
+              autoDownload: configData.updates.auto_download || configData.updates.auto_apply,
+              onEnabledChange: (event) => patchSection("updates", { enabled: event.target.checked }),
+              onAutoDownloadChange: (event) => patchSection("updates", { auto_download: event.target.checked, auto_apply: false }),
+            }}
+            updateInfo={updateInfo}
+            isCheckingUpdate={isCheckingUpdate}
+            isDownloadingUpdate={isDownloadingUpdate}
+            isApplyingUpdate={isApplyingUpdate}
+            onCheckUpdate={() => checkUpdate("check")}
+            onRunPrimaryAction={runUpdatePrimaryAction}
+          />
 
           <section className="setupSection">
             <div className="sectionTitle">
@@ -1856,12 +1936,22 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
 
           {setupTab === "notify" && (
           <section className="setupSection">
-            <div className="sectionTitle">
-              <Bell size={18} aria-hidden="true" />
-              <h3>Thông báo</h3>
+            <div className="sectionTitle withAction">
+              <div>
+                <Bell size={18} aria-hidden="true" />
+                <h3>Thông báo</h3>
+              </div>
+              <ConfigActions
+                isDirty={isDirty}
+                isLoading={isLoading}
+                isSaving={isSaving}
+                canSave={Boolean(configData) && !validation.hasErrors}
+                onReload={loadConfig}
+                onSave={saveConfig}
+              />
             </div>
             <div className="notificationLayout">
-              <div className="notificationCard">
+              <div className="notificationCard inlineCard">
                 <div>
                   <strong>Windows toast</strong>
                   <small>Thông báo nhanh trên desktop khi chạy foreground.</small>

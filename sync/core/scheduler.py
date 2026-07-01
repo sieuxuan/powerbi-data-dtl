@@ -145,7 +145,7 @@ class SyncRuntime:
         except ImportError as exc:
             raise RuntimeError("FastAPI and uvicorn are required. Install dependencies with requirements.txt") from exc
 
-        app = create_app(self.config, runtime_status=self._scheduler_status)
+        app = create_app(self.config, runtime_status=self._scheduler_status, runtime_control=self._scheduler_control)
         uvicorn_config = uvicorn.Config(
             app,
             host=self.config.api.host,
@@ -160,7 +160,7 @@ class SyncRuntime:
     def _scheduler_status(self) -> dict[str, Any]:
         """Return scheduler status for the local API health endpoint."""
         if self.scheduler is None:
-            return {"enabled": False, "running": False, "scheduled_jobs": 0, "next_runs": []}
+            return {"enabled": False, "running": False, "paused": False, "scheduled_jobs": 0, "next_runs": []}
         next_runs = []
         for job in self.scheduler.get_jobs():
             next_runs.append(
@@ -173,9 +173,24 @@ class SyncRuntime:
         return {
             "enabled": True,
             "running": bool(getattr(self.scheduler, "running", False)),
+            "paused": bool(getattr(self.scheduler, "state", None) == 2),
             "scheduled_jobs": len(next_runs),
             "next_runs": next_runs,
         }
+
+    def _scheduler_control(self, action: str) -> dict[str, Any]:
+        """Pause or resume the scheduler from the local API."""
+        if self.scheduler is None:
+            return {"status": "unavailable", "message": "Scheduler is not initialized."}
+        if action == "pause":
+            self.scheduler.pause()
+            LOGGER.info("Scheduler paused from API.")
+            return {"status": "paused", "message": "Scheduler paused."}
+        if action == "resume":
+            self.scheduler.resume()
+            LOGGER.info("Scheduler resumed from API.")
+            return {"status": "resumed", "message": "Scheduler resumed."}
+        return {"status": "ignored", "message": f"Unsupported scheduler action: {action}"}
 
     def _check_updates_on_startup(self) -> None:
         """Run a best-effort GitHub update check in the background."""

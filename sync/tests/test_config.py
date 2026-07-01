@@ -160,6 +160,28 @@ files:
             self.assertEqual(config.files[0].cron, "0 6 * * *")
             self.assertEqual(config.files[0].crons, ["0 6 * * *", "30 13 * * *"])
 
+    def test_invalid_cron_is_rejected(self) -> None:
+        config_text = """
+database:
+  host: localhost
+  name: powerbi_data
+  user: postgres
+files:
+  - name: sample
+    source:
+      type: local
+      path: sample.csv
+    target:
+      table: sample
+    crons:
+      - "bad cron"
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.yaml"
+            path.write_text(config_text, encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                load_config(path)
+
 
 if __name__ == "__main__":
     unittest.main()
