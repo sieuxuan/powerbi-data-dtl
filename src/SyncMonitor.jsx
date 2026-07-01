@@ -60,8 +60,8 @@ function progressLabel(state) {
 
 function cronLabel(job) {
   const crons = Array.isArray(job.crons) && job.crons.length ? job.crons : [job.cron].filter(Boolean);
-  if (crons.length > 1) return `${crons.length} lịch: ${crons.join(" · ")}`;
-  return crons[0] || "-";
+  if (crons.length > 1) return `${crons.length} lịch`;
+  return crons.length === 1 ? "1 lịch" : "-";
 }
 
 export async function syncApi(path, options = {}) {

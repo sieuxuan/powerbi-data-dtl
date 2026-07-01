@@ -491,19 +491,20 @@ td input, td select { min-height: 34px; }
   box-shadow: var(--shadow-md), 0 0 0 9999px rgba(17, 24, 39, 0.42);
 }
 .modalCloseButton {
-  position: absolute; top: 18px; right: 18px; z-index: 4;
-  width: 36px; height: 36px; border: 1px solid var(--line);
+  position: static; z-index: 4;
+  width: 36px; min-width: 36px; height: 36px; padding: 0; border: 1px solid var(--line);
   border-radius: 999px; background: var(--surface); color: var(--ink);
-  display: inline-grid; place-items: center; font-size: 22px; line-height: 1;
+  display: inline-grid; place-items: center; justify-self: end; align-self: center;
+  font-size: 22px; line-height: 1;
   box-shadow: var(--shadow-sm);
 }
 .modalCloseButton:hover { background: #F3F4F6; border-color: var(--line-strong); }
 .jobEditor.editing .jobCompactHeader {
   position: sticky; top: -20px; z-index: 2;
-  margin: -8px -8px 8px; padding: 14px 58px 14px 16px;
+  margin: -8px -8px 8px; padding: 14px 16px;
   background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
-  grid-template-columns: minmax(280px, 1fr) auto auto;
+  grid-template-columns: minmax(280px, 1fr) auto auto 36px;
   align-items: center;
   gap: 14px;
 }
@@ -640,6 +641,7 @@ td input, td select { min-height: 34px; }
 .cronListHeader, .cronListRow { display: flex; align-items: center; gap: 8px; }
 .cronListHeader { justify-content: space-between; }
 .cronListRow .cronEditor { flex: 1 1 auto; }
+.cronListRow .iconButton { width: 36px; min-width: 36px; height: 36px; align-self: end; }
 
 .retryGroup { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper); padding: 12px; display: grid; gap: 8px; }
 .retryGroup strong { font-size: 11px; font-weight: 700; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.05em; display: block; }
@@ -828,9 +830,13 @@ td input, td select { min-height: 34px; }
   .jobHeader { grid-template-columns: minmax(0, 1fr) 140px 36px; }
   .jobCompactHeader { grid-template-columns: minmax(0, 1fr); }
   .jobEditor.editing .jobCompactHeader {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 36px;
     align-items: stretch;
-    padding-right: 58px;
+    padding-right: 16px;
+  }
+  .jobEditor.editing .jobMeta,
+  .jobEditor.editing .jobCompactHeader .rowActions {
+    grid-column: 1 / -1;
   }
   .jobEditor.editing .jobMeta, .jobEditor.editing .rowActions { justify-content: flex-start; }
   .sectionActions { justify-content: flex-start; margin-left: 0; flex-wrap: wrap; }

@@ -318,8 +318,8 @@ function sourcePathLabel(file) {
 
 function jobCronLabel(file) {
   const crons = normalizeCronList(file?.crons, file?.cron);
-  if (crons.length > 1) return `${crons.length} lịch: ${crons.join(" · ")}`;
-  return crons[0] || "Chưa đặt lịch";
+  if (crons.length > 1) return `${crons.length} lịch`;
+  return crons.length === 1 ? "1 lịch" : "Chưa đặt lịch";
 }
 
 function defaultNewJob(index, schema = "public") {
