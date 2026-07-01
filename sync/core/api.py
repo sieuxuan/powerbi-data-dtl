@@ -494,7 +494,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None) -> Any:
             preview_result_cache[cache_key] = dict(result)
         return result
 
-    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.0")
+    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.3")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.api.cors_origins,

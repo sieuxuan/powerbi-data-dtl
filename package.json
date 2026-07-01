@@ -1,6 +1,6 @@
 {
   "name": "powerbi-data-dtl",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
