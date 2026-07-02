@@ -85,7 +85,7 @@ def infer_dataframe_schema(dataframe: "pd.DataFrame", engine: str = "postgresql"
 
 def connection_database(config: DatabaseConfig | DatabaseConnectionConfig) -> str:
     """Return database name from legacy or named connection config."""
-    return getattr(config, "name", getattr(config, "database", ""))
+    return getattr(config, "database", getattr(config, "name", ""))
 
 
 def postgres_type_for_series(series: "pd.Series") -> str:

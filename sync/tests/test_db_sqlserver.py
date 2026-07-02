@@ -3,8 +3,9 @@ from __future__ import annotations
 import importlib.util
 import unittest
 
-from core.config import DatabaseConnectionConfig
+from core.config import DatabaseConfig, DatabaseConnectionConfig
 from core.db import _sqlserver_connection_string, _sqlserver_type_for_series, quote_sqlserver_identifier
+from core.targets.common import connection_database
 
 
 class SqlServerHelperTests(unittest.TestCase):
@@ -37,6 +38,30 @@ class SqlServerHelperTests(unittest.TestCase):
         self.assertIn("PWD=secret", value)
         self.assertIn("Encrypt=yes", value)
         self.assertIn("TrustServerCertificate=yes", value)
+
+    def test_connection_database_prefers_database_over_display_name(self) -> None:
+        named_connection = DatabaseConnectionConfig(
+            id="default",
+            name="PostgreSQL local",
+            engine="postgresql",
+            host="localhost",
+            port=5432,
+            database="powerbi_data",
+            user="postgres",
+            password="secret",
+            schema="public",
+        )
+        legacy_database = DatabaseConfig(
+            host="localhost",
+            port=5432,
+            name="legacy_db",
+            user="postgres",
+            password="secret",
+            schema="public",
+        )
+
+        self.assertEqual(connection_database(named_connection), "powerbi_data")
+        self.assertEqual(connection_database(legacy_database), "legacy_db")
 
     @unittest.skipIf(importlib.util.find_spec("pandas") is None, "pandas is not installed")
     def test_sqlserver_type_mapping(self) -> None:
