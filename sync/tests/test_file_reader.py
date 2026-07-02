@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import tempfile
 import unittest
+from pathlib import Path
 
-from core.file_reader import _apply_column_renames, _clean_dataframe, _drop_skipped_columns
+from core.config import FileOptions
+from core.file_reader import FileReaderError, _apply_column_renames, _clean_dataframe, _drop_skipped_columns, read_tabular_file
 
 
 @unittest.skipIf(importlib.util.find_spec("pandas") is None, "pandas is not installed")
@@ -50,6 +53,14 @@ class FileReaderCleaningTests(unittest.TestCase):
         filtered = _drop_skipped_columns(cleaned, ["Buyer.1"])
 
         self.assertEqual(list(filtered.columns), ["Buyer", "Amount"])
+
+    def test_rejects_html_saved_as_excel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.xlsx"
+            path.write_bytes(b"<!DOCTYPE html><html><body>Sign in</body></html>")
+
+            with self.assertRaisesRegex(FileReaderError, "not a real Excel/CSV file"):
+                read_tabular_file(path, FileOptions())
 
 
 if __name__ == "__main__":

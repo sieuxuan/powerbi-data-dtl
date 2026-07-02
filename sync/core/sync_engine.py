@@ -13,7 +13,7 @@ from .config import AppConfig, DatabaseConnectionConfig, SyncFileConfig, connect
 from .db import PostgresClient, SqlTargetClient, create_sql_target_client, validate_upsert_dataframe
 from .file_reader import calculate_md5, read_tabular_file
 from .notifier import Notifier
-from .onedrive import DownloadResult, download_onedrive_file
+from .onedrive import DownloadResult, OneDriveError, download_onedrive_file
 from .retry import run_with_retry
 from .schema_compare import compare_dataframe_to_columns, normalize_dataframe_columns, normalize_identifier
 from .state_store import SyncStateStore
@@ -386,6 +386,7 @@ class SyncEngine:
                 self.config.retry.onedrive,
                 label=f"download OneDrive file {file_config.name}",
                 logger=LOGGER,
+                retryable=lambda exc: not isinstance(exc, OneDriveError),
             )
         raise NotImplementedError(f"Unsupported source type: {file_config.source.type}")
 

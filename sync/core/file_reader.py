@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 
 SUPPORTED_EXTENSIONS = {".xlsx", ".xlsm", ".xls", ".xlsb", ".csv", ".tsv"}
+HTML_PREFIXES = (b"<!doctype html", b"<html")
 
 
 class FileReaderError(RuntimeError):
@@ -40,6 +41,7 @@ def read_tabular_file(path: str | Path, options: FileOptions, nrows: int | None 
     extension = file_path.suffix.lower()
     if extension not in SUPPORTED_EXTENSIONS:
         raise FileReaderError(f"Unsupported file extension: {extension}")
+    _reject_html_file(file_path)
 
     try:
         import pandas as pd
@@ -88,6 +90,18 @@ def _read_csv(pd: Any, path: Path, options: FileOptions, extension: str, nrows: 
         usecols=options.usecols,
         nrows=nrows,
     )
+
+
+def _reject_html_file(path: Path) -> None:
+    """Reject saved login/error pages before pandas tries to parse them as data files."""
+    with path.open("rb") as file_handle:
+        sample = file_handle.read(1024).lstrip().lower()
+    if any(sample.startswith(prefix) for prefix in HTML_PREFIXES) or b"<html" in sample[:256]:
+        raise FileReaderError(
+            f"File is not a real Excel/CSV file: {path}. "
+            "It looks like an HTML login/error page. For SharePoint/OneDrive, create a downloadable sharing link "
+            "or use the local synced OneDrive file path."
+        )
 
 
 def _read_excel(pd: Any, path: Path, options: FileOptions, extension: str, nrows: int | None = None) -> "pd.DataFrame":

@@ -633,7 +633,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
             preview_result_cache[cache_key] = dict(result)
         return result
 
-    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.7")
+    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.8")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.api.cors_origins,
@@ -748,8 +748,9 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
 
     @app.post("/api/config/test-file")
     def test_file(payload: dict[str, Any]) -> dict[str, Any]:
-        _runtime_config, file_config, source = prepare_file_from_payload(payload)
+        source = None
         try:
+            _runtime_config, file_config, source = prepare_file_from_payload(payload)
             read_result = read_tabular_file(source.path, file_config.options)
             return {
                 "status": "ok",
@@ -766,7 +767,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
-            if source.temporary:
+            if source is not None and source.temporary:
                 source.path.unlink(missing_ok=True)
 
     @app.post("/api/config/dry-run-file")
@@ -778,13 +779,14 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
 
     @app.post("/api/config/preview-file")
     def preview_file(payload: dict[str, Any]) -> dict[str, Any]:
-        _runtime_config, file_config, source, file_hash = prepare_preview_file_from_payload(payload)
+        source = None
         try:
+            _runtime_config, file_config, source, file_hash = prepare_preview_file_from_payload(payload)
             return cached_preview_tabular_file(source.path, file_config, file_hash)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
-            if source.temporary:
+            if source is not None and source.temporary:
                 source.path.unlink(missing_ok=True)
 
     @app.post("/api/files/upload")
