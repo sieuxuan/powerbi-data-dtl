@@ -283,6 +283,7 @@ input:focus, select:focus, textarea:focus {
   background: var(--surface); max-height: calc(100vh - 280px);
 }
 table { border-collapse: collapse; width: 100%; min-width: 760px; }
+.syncTable table { min-width: 1040px; }
 th, td {
   border-bottom: 1px solid #F1F3F7; padding: 10px 14px;
   text-align: left; vertical-align: middle; font-size: 13px;
@@ -306,9 +307,10 @@ td input, td select { min-height: 34px; }
 .syncTable td { font-variant-numeric: tabular-nums; }
 .syncTable td strong { display: block; font-size: 13px; font-weight: 600; }
 .syncTable td small { display: block; margin-top: 3px; color: var(--ink-soft); font-size: 12px; }
+.syncTable td:first-child { min-width: 140px; max-width: 260px; }
 .logsTable { max-height: 360px; }
 
-.errorText { color: var(--err); font-size: 12px; font-family: var(--ui) !important; }
+.errorText { color: var(--err); font-size: 12px; font-family: var(--ui) !important; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; }
 
 /* Signature: status spine on the left edge of each job row */
 .jobRow td:first-child { box-shadow: inset 3px 0 0 transparent; }
@@ -680,8 +682,8 @@ td input, td select { min-height: 34px; }
 .dryRunSummary .ok { color: var(--ok); background: var(--ok-bg); border-color: #BBF7D0; }
 .dryRunSummary .warn { color: var(--warn); background: var(--warn-bg); border-color: #FDE68A; }
 .dryRunDiffGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.dryRunDiffGrid > div { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--paper); padding: 9px; min-width: 0; }
-.dryRunDiffGrid small { display: block; margin-top: 4px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.dryRunDiffGrid > div { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--paper); padding: 9px; min-width: 0; overflow: hidden; }
+.dryRunDiffGrid small { display: block; margin-top: 4px; color: var(--ink-soft); overflow-wrap: anywhere; max-height: 120px; overflow-y: auto; line-height: 1.5; }
 
 .fieldError { color: var(--err) !important; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
 .validationPanel {

@@ -343,25 +343,44 @@ class PostgresClient:
                 raise
 
     def _copy_dataframe(self, cursor: Any, schema: str, table: str, dataframe: "pd.DataFrame") -> None:
-        """Copy DataFrame rows into PostgreSQL using COPY FROM STDIN."""
+        """Copy DataFrame rows into PostgreSQL using COPY FROM STDIN.
+
+        Uses tab-delimited text format (not CSV) so that pandas never wraps
+        the NULL marker in quotes.  With CSV + QUOTE_MINIMAL the marker could
+        appear as ``"__SYNC_NULL_…__"`` which does not match the unquoted
+        NULL string declared in the COPY statement — causing
+        ``invalid input syntax`` errors on numeric columns.
+        """
         if dataframe.empty:
             return
 
         null_marker = f"__SYNC_NULL_{uuid.uuid4().hex}__"
+
+        # Sanitise string columns: tabs, newlines, and backslashes break
+        # the PostgreSQL TEXT-format COPY protocol.
+        clean = dataframe.copy()
+        for col in clean.columns:
+            if clean[col].dtype == object:
+                clean[col] = clean[col].str.replace(
+                    r"[\t\r\n\\]", " ", regex=True
+                )
+
         buffer = io.StringIO()
-        dataframe.to_csv(
+        clean.to_csv(
             buffer,
             index=False,
             header=False,
             na_rep=null_marker,
-            quoting=csv.QUOTE_MINIMAL,
+            sep="\t",
+            quoting=csv.QUOTE_NONE,
+            escapechar="\\",
             lineterminator="\n",
         )
         buffer.seek(0)
         column_list = ", ".join(quote_identifier(column) for column in dataframe.columns)
         copy_sql = (
             f"COPY {qualified_name(schema, table)} ({column_list}) "
-            f"FROM STDIN WITH (FORMAT CSV, HEADER FALSE, NULL '{null_marker}')"
+            f"FROM STDIN WITH (FORMAT TEXT, DELIMITER E'\\t', NULL '{null_marker}')"
         )
         cursor.copy_expert(copy_sql, buffer)
 

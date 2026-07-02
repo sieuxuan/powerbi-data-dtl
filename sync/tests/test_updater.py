@@ -21,7 +21,7 @@ class UpdaterTests(unittest.TestCase):
             config = UpdateConfig(
                 enabled=True,
                 repo="example/repo",
-                current_version="1.1.0",
+                current_version="1.1.1",
                 asset_pattern="PowerBIDataDTL-portable.zip",
             )
 
@@ -42,7 +42,7 @@ class UpdaterTests(unittest.TestCase):
             config = UpdateConfig(
                 enabled=True,
                 repo="example/repo",
-                current_version="1.1.0",
+                current_version="1.1.1",
                 asset_pattern="PowerBIDataDTL-portable.zip",
             )
 
