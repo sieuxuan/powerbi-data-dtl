@@ -45,7 +45,7 @@ const DEFAULT_CONFIG = {
   updates: {
     enabled: false,
     repo: "",
-    current_version: "1.1.1",
+    current_version: "1.1.2",
     asset_pattern: "PowerBIDataDTL-portable.zip",
     check_on_startup: true,
     auto_download: false,

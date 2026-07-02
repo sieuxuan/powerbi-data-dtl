@@ -94,7 +94,7 @@ h1, h2, h3, h4 { font-family: var(--ui); }
    ===================================================================== */
 .workspace {
   flex: 1; min-width: 0; width: 100%;
-  max-width: 1280px; margin: 0 auto;
+  max-width: 1600px; margin: 0 auto;
   padding: 22px 28px;
   display: flex; flex-direction: column; gap: 12px;
 }
@@ -307,10 +307,13 @@ td input, td select { min-height: 34px; }
 .syncTable td { font-variant-numeric: tabular-nums; }
 .syncTable td strong { display: block; font-size: 13px; font-weight: 600; }
 .syncTable td small { display: block; margin-top: 3px; color: var(--ink-soft); font-size: 12px; }
-.syncTable td:first-child { min-width: 140px; max-width: 260px; }
+.syncTable td:first-child { min-width: 180px; max-width: 400px; }
 .logsTable { max-height: 360px; }
 
-.errorText { color: var(--err); font-size: 12px; font-family: var(--ui) !important; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; }
+.errorText {
+  color: var(--err); font-size: 12px; font-family: var(--ui) !important;
+  word-break: break-word; overflow-wrap: anywhere; margin-top: 6px !important;
+}
 
 /* Signature: status spine on the left edge of each job row */
 .jobRow td:first-child { box-shadow: inset 3px 0 0 transparent; }
