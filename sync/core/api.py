@@ -751,16 +751,20 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
         source = None
         try:
             _runtime_config, file_config, source = prepare_file_from_payload(payload)
-            read_result = read_tabular_file(source.path, file_config.options)
+            sample_limit = int(payload.get("sample_limit") or 100)
+            sample_limit = max(100, min(sample_limit, 20_000))
+            read_result = read_tabular_file(source.path, file_config.options, nrows=sample_limit)
             return {
                 "status": "ok",
                 "message": (
-                    f"Read {read_result.row_count} row(s), "
+                    f"Read sample {read_result.row_count} row(s), "
                     f"{len(read_result.columns)} column(s) from {read_result.file_path}."
                 ),
                 "path": str(read_result.file_path),
                 "hash": read_result.file_hash,
                 "rows": read_result.row_count,
+                "sampled": True,
+                "sample_limit": sample_limit,
                 "columns": read_result.columns[:100],
                 "column_count": len(read_result.columns),
             }

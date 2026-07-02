@@ -1011,6 +1011,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
     try {
       const result = await syncApi("/api/config/test-file", {
         method: "POST",
+        timeoutMs: 120000,
         body: JSON.stringify({ config: configData, file: configData.files[index] }),
       });
       const columnPreview = (result.columns || []).slice(0, 6).join(", ");
@@ -1018,7 +1019,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
         ...current,
         [index]: {
           type: "success",
-          text: `${result.rows} dòng, ${result.column_count} cột. ${columnPreview ? `Cột: ${columnPreview}` : ""}`,
+          text: `${result.sampled ? `Đọc mẫu ${result.rows} dòng` : `${result.rows} dòng`}, ${result.column_count} cột. ${columnPreview ? `Cột: ${columnPreview}` : ""}`,
         },
       }));
     } catch (testError) {
