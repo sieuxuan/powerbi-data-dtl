@@ -13,6 +13,7 @@ ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 SUPPORTED_SOURCE_TYPES = {"local", "onedrive"}
 SUPPORTED_SYNC_MODES = {"truncate_insert", "drop_recreate", "append", "upsert"}
 SUPPORTED_MISMATCH_POLICIES = {"notify", "auto_recreate", "skip"}
+SUPPORTED_DATABASE_ENGINES = {"postgresql", "sqlserver"}
 
 
 class ConfigError(ValueError):
@@ -27,6 +28,25 @@ class DatabaseConfig:
     user: str
     password: str
     schema: str = "public"
+
+
+@dataclass(frozen=True)
+class DatabaseConnectionConfig:
+    """Named SQL target connection used by one or more sync jobs."""
+
+    id: str
+    name: str
+    engine: str
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
+    schema: str = "public"
+    driver: str = "ODBC Driver 18 for SQL Server"
+    trusted_connection: bool = False
+    encrypt: bool = True
+    trust_server_certificate: bool = True
 
 
 @dataclass(frozen=True)
@@ -49,6 +69,7 @@ class TargetConfig:
     table: str
     schema: str | None = None
     primary_key: list[str] = field(default_factory=list)
+    connection_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -165,6 +186,7 @@ class MaintenanceConfig:
 @dataclass(frozen=True)
 class AppConfig:
     database: DatabaseConfig
+    database_connections: list[DatabaseConnectionConfig]
     schedule: ScheduleConfig
     files: list[SyncFileConfig]
     notifications: NotificationConfig
@@ -196,8 +218,10 @@ def load_config(path: str | Path) -> AppConfig:
         raise ConfigError("Config root must be a YAML mapping.")
 
     database = _parse_database(_require_mapping(raw, "database"))
+    database_connections = _parse_database_connections(raw.get("database_connections"), database)
+    connection_schemas = {connection.id: connection.schema for connection in database_connections}
     schedule = _parse_schedule(_optional_mapping(raw, "schedule"))
-    files = _parse_files(raw.get("files", []), database.schema)
+    files = _parse_files(raw.get("files", []), connection_schemas)
     notifications = _parse_notifications(_optional_mapping(raw, "notifications"))
     logging_config = _parse_logging(_optional_mapping(raw, "logging"))
     downloads = _parse_downloads(_optional_mapping(raw, "downloads"))
@@ -208,6 +232,7 @@ def load_config(path: str | Path) -> AppConfig:
 
     return AppConfig(
         database=database,
+        database_connections=database_connections,
         schedule=schedule,
         files=files,
         notifications=notifications,
@@ -225,6 +250,14 @@ def load_config(path: str | Path) -> AppConfig:
 def enabled_files(config: AppConfig) -> list[SyncFileConfig]:
     """Return enabled sync file entries."""
     return [item for item in config.files if item.enabled]
+
+
+def connection_by_id(config: AppConfig, connection_id: str) -> DatabaseConnectionConfig:
+    """Return a named SQL target connection."""
+    for connection in config.database_connections:
+        if connection.id == connection_id:
+            return connection
+    raise ConfigError(f"Unknown database connection id: {connection_id}")
 
 
 def _expand_env_vars(text: str) -> str:
@@ -286,6 +319,84 @@ def _parse_database(raw: dict[str, Any]) -> DatabaseConfig:
     )
 
 
+def _default_connection_from_database(database: DatabaseConfig) -> DatabaseConnectionConfig:
+    """Convert the legacy database block into the default target connection."""
+    return DatabaseConnectionConfig(
+        id="default",
+        name="Default PostgreSQL",
+        engine="postgresql",
+        host=database.host,
+        port=database.port,
+        database=database.name,
+        user=database.user,
+        password=database.password,
+        schema=database.schema,
+    )
+
+
+def _parse_database_connections(raw: Any, legacy_database: DatabaseConfig) -> list[DatabaseConnectionConfig]:
+    """Parse named SQL target connections, preserving legacy database compatibility."""
+    default_connection = _default_connection_from_database(legacy_database)
+    if raw in (None, ""):
+        return [default_connection]
+    if not isinstance(raw, list):
+        raise ConfigError("database_connections must be a list")
+
+    parsed: list[DatabaseConnectionConfig] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw):
+        prefix = f"database_connections[{index}]"
+        if not isinstance(item, dict):
+            raise ConfigError(f"{prefix} must be a mapping")
+        connection = _parse_database_connection(item, prefix)
+        if connection.id in seen:
+            raise ConfigError(f"Duplicate database connection id: {connection.id}")
+        seen.add(connection.id)
+        parsed.append(connection)
+
+    if "default" not in seen:
+        parsed.insert(0, default_connection)
+    return parsed
+
+
+def _parse_database_connection(raw: dict[str, Any], prefix: str) -> DatabaseConnectionConfig:
+    """Parse one named SQL target connection."""
+    connection_id = str(raw.get("id") or "").strip()
+    if not connection_id:
+        raise ConfigError(f"{prefix}.id is required")
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$", connection_id):
+        raise ConfigError(f"{prefix}.id must use letters, numbers and underscores; do not start with a number")
+
+    engine = str(raw.get("engine") or "postgresql").strip().lower()
+    if engine not in SUPPORTED_DATABASE_ENGINES:
+        raise ConfigError(f"{prefix}.engine must be one of {sorted(SUPPORTED_DATABASE_ENGINES)}")
+
+    required = ("host", "database")
+    for key in required:
+        if not raw.get(key):
+            raise ConfigError(f"{prefix}.{key} is required")
+    trusted_connection = _as_bool(raw.get("trusted_connection", False))
+    if not trusted_connection and not raw.get("user"):
+        raise ConfigError(f"{prefix}.user is required unless trusted_connection is true")
+
+    default_port = 1433 if engine == "sqlserver" else 5432
+    return DatabaseConnectionConfig(
+        id=connection_id,
+        name=str(raw.get("name") or connection_id),
+        engine=engine,
+        host=str(raw["host"]),
+        port=int(raw.get("port", default_port)),
+        database=str(raw["database"]),
+        user=str(raw.get("user", "")),
+        password=str(raw.get("password", "")),
+        schema=str(raw.get("schema", "dbo" if engine == "sqlserver" else "public")),
+        driver=str(raw.get("driver", "ODBC Driver 18 for SQL Server")),
+        trusted_connection=trusted_connection,
+        encrypt=_as_bool(raw.get("encrypt", True)),
+        trust_server_certificate=_as_bool(raw.get("trust_server_certificate", True)),
+    )
+
+
 def _parse_schedule(raw: dict[str, Any]) -> ScheduleConfig:
     """Parse scheduler defaults."""
     default_cron = str(raw.get("default_cron", "0 6 * * *"))
@@ -298,7 +409,7 @@ def _parse_schedule(raw: dict[str, Any]) -> ScheduleConfig:
     )
 
 
-def _parse_files(raw_files: Any, default_schema: str) -> list[SyncFileConfig]:
+def _parse_files(raw_files: Any, connection_schemas: dict[str, str]) -> list[SyncFileConfig]:
     """Parse file sync entries."""
     if raw_files is None:
         return []
@@ -317,7 +428,7 @@ def _parse_files(raw_files: Any, default_schema: str) -> list[SyncFileConfig]:
 
         source = _parse_source(_require_mapping(raw, "source"), prefix)
         sync_mode = str(raw.get("sync_mode", "truncate_insert"))
-        target = _parse_target(_require_mapping(raw, "target"), prefix, default_schema, sync_mode)
+        target = _parse_target(_require_mapping(raw, "target"), prefix, connection_schemas, sync_mode)
         options = _parse_options(_optional_mapping(raw, "options"))
         mismatch_policy = str(raw.get("on_column_mismatch", "notify"))
 
@@ -377,16 +488,24 @@ def _parse_source(raw: dict[str, Any], prefix: str) -> SourceConfig:
     )
 
 
-def _parse_target(raw: dict[str, Any], prefix: str, default_schema: str, sync_mode: str) -> TargetConfig:
+def _parse_target(
+    raw: dict[str, Any],
+    prefix: str,
+    connection_schemas: dict[str, str],
+    sync_mode: str,
+) -> TargetConfig:
     """Parse target config."""
+    connection_id = str(raw.get("connection_id") or "default").strip()
+    if connection_id not in connection_schemas:
+        raise ConfigError(f"{prefix}.target.connection_id references unknown database connection: {connection_id}")
     table = str(raw.get("table") or "").strip()
     if not table:
         raise ConfigError(f"{prefix}.target.table is required")
-    schema = str(raw.get("schema") or default_schema).strip()
+    schema = str(raw.get("schema") or connection_schemas[connection_id]).strip()
     primary_key = _parse_string_list(raw.get("primary_key", []), f"{prefix}.target.primary_key")
     if sync_mode == "upsert" and not primary_key:
         raise ConfigError(f"{prefix}.target.primary_key is required when sync_mode is upsert")
-    return TargetConfig(table=table, schema=schema, primary_key=primary_key)
+    return TargetConfig(table=table, schema=schema, primary_key=primary_key, connection_id=connection_id)
 
 
 def _parse_options(raw: dict[str, Any]) -> FileOptions:

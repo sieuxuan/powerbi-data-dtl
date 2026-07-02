@@ -1,6 +1,6 @@
 # PowerBI Data DTL
 
-Web app local để đọc file `.xls`, `.xlsx`, `.xlsm`, `.csv`, `.tsv`, tự suy luận schema và tạo SQL import. Dự án cũng có service Python trong `sync/` để tự động đồng bộ Excel/CSV/OneDrive vào PostgreSQL và theo dõi qua màn hình Sync Monitor.
+Web app local để đọc file `.xls`, `.xlsx`, `.xlsm`, `.csv`, `.tsv`, tự suy luận schema và tạo SQL import. Dự án cũng có service Python trong `sync/` để tự động đồng bộ Excel/CSV/OneDrive vào PostgreSQL hoặc Microsoft SQL Server theo từng job và theo dõi qua màn hình Sync Monitor.
 
 ## Chạy nhanh trên Windows
 
@@ -46,6 +46,8 @@ run-portable.bat
 
 Portable runtime mở app tại `http://127.0.0.1:8765/` và không cần Node.js/Python cài sẵn trên máy chạy. Bundle không copy log, upload, download, `.env` thật hoặc `config.yaml` thật từ máy build; file cấu hình trong bundle được tạo từ template an toàn.
 
+Portable mặc định dùng system tray và auto-start bằng shortcut Startup nên không đóng gói `pywin32`, giúp zip nhẹ hơn. Nếu cần Windows Service trong portable, build bằng `.\build_portable.ps1 -IncludeServiceSupport`.
+
 ## Chạy thủ công từng phần
 
 ```bash
@@ -87,8 +89,10 @@ Nếu UI báo `Failed to fetch` hoặc `Không tải được cấu hình`, Sync
 
 ## Cấu hình Sync trong app
 
-- Màn `Cấu hình Sync` được chia tab: `Jobs & wizard`, `SQL, API, update`, `Thông báo`.
-- `SQL, API, update`: nhập PostgreSQL, test kết nối/quyền ghi, cấu hình API local, download, GitHub update, backup/restore, retry/log.
+- Màn `Cấu hình Sync` được chia tab: `Jobs`, `Hệ thống`, `Thông báo`.
+- `Hệ thống`: quản lý danh sách SQL servers, thêm/sửa/xóa/test PostgreSQL hoặc SQL Server, cấu hình update, backup/restore, retry/log.
+- Nếu dùng SQL Server, máy Windows cần cài Microsoft ODBC Driver 18 for SQL Server; portable đã có `pyodbc` nhưng không thay thế ODBC driver hệ thống.
+- Mỗi job có dropdown `Server import` để chọn `database_connections[].id` riêng.
 - Bấm `Test quyền ghi` để kiểm tra user có tạo/insert/drop bảng test trong schema đích được không.
 - `Lịch chạy`: chọn giờ chạy hằng ngày, mỗi giờ, hoặc nhập cron tùy chỉnh.
 - `Thêm job` mở wizard 3 bước: File/link -> Preview -> Mapping bảng; wizard không bắt setup lại SQL.
@@ -102,21 +106,21 @@ Nếu UI báo `Failed to fetch` hoặc `Không tải được cấu hình`, Sync
 - `Thông báo` hỗ trợ Windows toast, email và webhook POST JSON. Webhook mặc định tắt; chỉ cần bật và dán URL khi có endpoint.
 - Có nút `Test webhook`; webhook mặc định gửi `success`, `failed`, `mismatch`.
 - Nếu chọn `upsert`, điền `Primary key` rõ ràng, ví dụ `id` hoặc `id, branch_code`.
-- Nút `Dry run` đọc file/link, preview kiểu dữ liệu PostgreSQL, so schema và test quyền ghi nhưng không import dữ liệu.
+- Nút `Dry run` đọc file/link, preview kiểu dữ liệu theo server đã chọn, so schema và test quyền ghi nhưng không import dữ liệu.
 - `Backup & Restore` cho export/import bundle zip gồm `sync/config.yaml`, `sync/.env` và `sync/uploads` để chuyển máy/backup.
 - `Retry & Log` có retention cleanup cho `sync_log`, `downloads`, `uploads`, `.preview_cache`.
-- `Cập nhật GitHub` kiểm tra GitHub Releases của `sieuxuan/powerbi-data-dtl`; portable có thể tự tải, giải nén, copy file mới và mở lại app, đồng thời giữ nguyên `sync/config.yaml`, `sync/.env`, logs/uploads/downloads.
+- `Cập nhật GitHub` kiểm tra GitHub Releases của `sieuxuan/powerbi-data-dtl`; portable có thể tự tải, đóng runtime cũ, copy file mới và mở lại app, đồng thời giữ nguyên `sync/config.yaml`, `sync/.env`, logs/uploads/downloads. Tab browser cũ có thể vẫn còn do trình duyệt không cho app local tự đóng tab chắc chắn; launcher sẽ mở lại dashboard mới sau khi cập nhật.
 
 ## Tính năng Sync Monitor
 
 - Xem danh sách job trong `sync/config.yaml`.
 - Xem progress khi job chạy: tải file, đọc file, kiểm tra, import, hoàn tất.
-- Xem trạng thái lần chạy gần nhất và log trong PostgreSQL `sync_log`.
+- Xem trạng thái lần chạy gần nhất và log trong SQLite local `sync/logs/sync_state.sqlite`.
 - Chạy một job hoặc chạy tất cả job từ giao diện.
 - Hỗ trợ `truncate_insert`, `drop_recreate`, `append`, `upsert`, skip file không đổi theo hash.
 
-## Cấu hình PostgreSQL
+## Cấu hình SQL servers
 
-Điền server PostgreSQL trong màn `Cấu hình Sync`, bấm `Test kết nối`, sau đó bấm `Lưu PostgreSQL` hoặc `Lưu cấu hình`.
+Điền server trong tab `Hệ thống`, bấm `Test` hoặc `Test ghi`, sau đó bấm `Lưu cấu hình`. Config cũ chỉ có block `database` vẫn chạy được; app tự xem nó là connection `default`.
 
 Nếu dùng `${PG_PASSWORD}`, copy `sync/.env.example` thành `sync/.env` rồi đặt `PG_PASSWORD`. Nếu nhập password trực tiếp trong UI thì password được lưu vào `sync/config.yaml`.

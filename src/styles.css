@@ -345,32 +345,6 @@ td input, td select { min-height: 34px; }
 }
 
 /* =====================================================================
-   WELCOME / UPLOAD
-   ===================================================================== */
-.welcome { flex: 1; display: flex; align-items: center; justify-content: center; padding: 48px 0; }
-.uploadCard {
-  width: min(520px, 100%);
-  background: var(--surface);
-  background-image:
-    linear-gradient(rgba(11,18,32,0.022) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(11,18,32,0.022) 1px, transparent 1px);
-  background-size: 22px 22px;
-  border: 2px dashed var(--line-strong); border-radius: var(--r-lg);
-  padding: 48px 40px; display: flex; flex-direction: column; align-items: center; gap: 14px;
-  text-align: center; transition: border-color .15s, box-shadow .15s;
-}
-.uploadCard:hover {
-  border-color: var(--ink-faint);
-  box-shadow: 0 0 0 4px rgba(11, 18, 32, 0.04);
-}
-.uploadCard svg { color: var(--ink-soft); }
-.uploadCard h2 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
-.uploadCard p { margin: 0; color: var(--ink-soft); font-size: 13px; }
-.uploadActions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
-.importLinkInput { width: 100%; min-height: 36px; }
-.hiddenInput { display: none; }
-
-/* =====================================================================
    TOPBAR
    ===================================================================== */
 .topbar { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
@@ -387,42 +361,6 @@ td input, td select { min-height: 34px; }
   display: inline-flex; align-items: center;
   font-size: 12px; font-weight: 700; white-space: nowrap;
 }
-
-/* =====================================================================
-   SETTINGS ROW (builder)
-   ===================================================================== */
-.settingsRow { display: grid; grid-template-columns: minmax(240px, 1fr) 160px 240px; gap: 12px; align-items: end; }
-
-/* =====================================================================
-   SQL PANEL
-   ===================================================================== */
-.sqlPanel { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.sqlSection {
-  min-width: 0; border: 1px solid var(--line); border-radius: var(--r-lg);
-  background: var(--surface); overflow: hidden; display: flex; flex-direction: column;
-}
-.sqlHeader {
-  min-height: 48px; padding: 8px 14px; display: flex; align-items: center;
-  justify-content: space-between; gap: 10px;
-  background: var(--paper); border-bottom: 1px solid var(--line); flex-shrink: 0;
-}
-.sqlHeader h3 {
-  margin: 0; font-size: 11px; font-weight: 700; color: var(--ink-soft);
-  text-transform: uppercase; letter-spacing: 0.06em;
-}
-.sqlHeader div { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-.sqlHeader button {
-  border: 1px solid var(--line); border-radius: var(--r-sm);
-  min-height: 30px; padding: 0 10px; background: var(--surface); color: var(--ink);
-  display: inline-flex; align-items: center; gap: 5px; font-weight: 600; font-size: 12px;
-}
-.sqlHeader button:hover { background: #F3F4F6; }
-.sqlBox {
-  flex: 1; min-height: 300px; resize: vertical; padding: 14px 16px;
-  font-family: var(--mono); font-size: 13px; line-height: 1.6;
-  border: 0; background: var(--surface); color: var(--ink); width: 100%;
-}
-.sqlBox.split { display: block; min-height: 260px; border: 0; border-radius: 0; }
 
 /* =====================================================================
    SYNC METRICS
@@ -475,6 +413,27 @@ td input, td select { min-height: 34px; }
 .setupGrid.compact { grid-template-columns: minmax(300px, 1.2fr) minmax(220px, 0.8fr) minmax(220px, 0.8fr); }
 .setupGrid label, .jobHeader label, .retryGroup label, .cronEditor { display: grid; gap: 6px; align-content: start; }
 .setupGrid .wideField { grid-column: span 2; }
+.connectionList { display: grid; gap: 12px; }
+.connectionCard {
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: #FAFBFC; padding: 14px; display: grid; gap: 12px;
+}
+.connectionCard.collapsed { background: var(--surface); }
+.connectionSummaryButton {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center;
+  gap: 8px; min-width: 0; padding: 0; border: 0; background: transparent;
+  color: var(--ink); text-align: left; font: inherit; cursor: pointer;
+}
+.connectionSummaryButton svg { transition: transform 0.16s ease; }
+.connectionCard.expanded .connectionSummaryButton svg { transform: rotate(90deg); }
+.connectionSummaryButton span { min-width: 0; display: grid; gap: 3px; }
+.jobCardHeader {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; min-width: 0;
+}
+.jobCardHeader > div:first-child { min-width: 0; display: grid; gap: 3px; }
+.jobCardHeader strong, .jobCardHeader small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobCardHeader small { color: var(--ink-soft); font-size: 12px; }
 
 .setupJobs { display: grid; gap: 14px; }
 .jobEditor {
@@ -794,38 +753,11 @@ td input, td select { min-height: 34px; }
 }
 
 /* =====================================================================
-   TOAST
-   ===================================================================== */
-@keyframes toastIn {
-  from { opacity: 0; transform: translateY(16px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes toastOut {
-  from { opacity: 1; transform: translateY(0); }
-  to   { opacity: 0; transform: translateY(16px); }
-}
-.status {
-  position: fixed; right: 20px; bottom: 20px;
-  max-width: min(480px, calc(100vw - 40px));
-  padding: 12px 16px; border-radius: var(--r-md);
-  background: var(--ink); color: #F8FAFC; font-size: 13px;
-  box-shadow: var(--shadow-md); z-index: 1000;
-  animation: toastIn 0.25s ease-out;
-}
-.status.hiding {
-  animation: toastOut 0.3s ease-in forwards;
-}
-
-/* =====================================================================
    RESPONSIVE
    ===================================================================== */
-@media (max-width: 1024px) {
-  .sqlPanel { grid-template-columns: 1fr; }
-}
 @media (max-width: 900px) {
   .workspace { padding: 20px; }
   .topbar { flex-direction: column; align-items: stretch; }
-  .settingsRow { grid-template-columns: 1fr; }
   .actions { justify-content: flex-start; }
   .syncMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .setupGrid, .setupGrid.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -849,8 +781,6 @@ td input, td select { min-height: 34px; }
   .sectionActions { justify-content: flex-start; margin-left: 0; flex-wrap: wrap; }
   .jobMeta, .jobCompactHeader .rowActions { justify-content: flex-start; }
   .sourceInputRow, .sourceInputRow.linkMode, .columnMappingGrid, .columnMappingRow, .typePreviewGrid, .dryRunSummary, .dryRunDiffGrid { grid-template-columns: 1fr; }
-  .sqlHeader { align-items: flex-start; flex-direction: column; }
-  .uploadCard { padding: 32px 24px; }
   .appNav button { padding: 0 10px; font-size: 13px; }
 }
 @media (max-width: 640px) {

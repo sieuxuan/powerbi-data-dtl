@@ -9,13 +9,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from .config import AppConfig, SyncFileConfig, enabled_files
-from .db import PostgresClient, validate_upsert_dataframe
+from .config import AppConfig, DatabaseConnectionConfig, SyncFileConfig, connection_by_id, enabled_files
+from .db import PostgresClient, SqlTargetClient, create_sql_target_client, validate_upsert_dataframe
 from .file_reader import calculate_md5, read_tabular_file
 from .notifier import Notifier
 from .onedrive import DownloadResult, download_onedrive_file
 from .retry import run_with_retry
-from .schema_compare import compare_columns, normalize_dataframe_columns, normalize_identifier
+from .schema_compare import compare_dataframe_to_columns, normalize_dataframe_columns, normalize_identifier
+from .state_store import SyncStateStore
 
 
 LOGGER = logging.getLogger(__name__)
@@ -33,6 +34,11 @@ class SyncResult:
     file_hash: str | None = None
     file_path: str | None = None
     error_message: str | None = None
+    connection_id: str = "default"
+    connection_name: str = "Default"
+    engine: str = "postgresql"
+    target_schema: str = "public"
+    target_table: str = ""
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -48,8 +54,33 @@ class SyncResult:
             "file_hash": self.file_hash,
             "file_path": self.file_path,
             "error_message": self.error_message,
+            "connection_id": self.connection_id,
+            "connection_name": self.connection_name,
+            "engine": self.engine,
+            "target_schema": self.target_schema,
+            "target_table": self.target_table,
             "details": self.details,
         }
+
+
+@dataclass(frozen=True)
+class TargetContext:
+    """Resolved import target for one sync job."""
+
+    connection: DatabaseConnectionConfig
+    schema: str
+    table: str
+    primary_key: list[str]
+
+    @property
+    def table_name(self) -> str:
+        """Return schema-qualified target table name."""
+        return f"{self.schema}.{self.table}"
+
+    @property
+    def log_key(self) -> tuple[str, str, str]:
+        """Return target identity fields used by local sync state."""
+        return (self.connection.id, self.schema, self.table)
 
 
 class SyncEngine:
@@ -57,7 +88,8 @@ class SyncEngine:
 
     def __init__(self, config: AppConfig, progress_callback: Callable[[str, str], None] | None = None) -> None:
         self.config = config
-        self.db = PostgresClient(config.database)
+        self.state = SyncStateStore(config.base_dir, config.logging.file_dir)
+        self._target_clients: dict[str, SqlTargetClient] = {}
         self.notifier = Notifier(config.notifications)
         self.progress_callback = progress_callback
 
@@ -87,26 +119,41 @@ class SyncEngine:
     ) -> SyncResult:
         """Run one sync job and convert failures into a result."""
         started_at = datetime.now()
-        table = normalize_identifier(file_config.target.table, "table")
-        schema = normalize_identifier(file_config.target.schema or self.config.database.schema, "schema")
-        primary_key = [normalize_identifier(column, "column") for column in file_config.target.primary_key]
-        LOGGER.info("[%s] Starting sync into %s.%s", file_config.name, schema, table)
+        target = self._target_context(file_config)
+        LOGGER.info(
+            "[%s] Starting sync into %s:%s.%s",
+            file_config.name,
+            target.connection.id,
+            target.schema,
+            target.table,
+        )
         self._progress(file_config.name, "starting")
 
         try:
-            result = self._run_one(file_config, schema, table, primary_key, started_at, force=force)
+            result = self._run_one(
+                file_config,
+                target,
+                self._target_client(target.connection),
+                started_at,
+                force=force,
+            )
             LOGGER.info("[%s] %s", file_config.name, result.message)
         except Exception as exc:
             LOGGER.exception("[%s] Sync failed.", file_config.name)
             result = SyncResult(
                 name=file_config.name,
-                table=f"{schema}.{table}",
+                table=target.table_name,
                 status="failed",
                 rows_imported=0,
                 message=str(exc),
                 started_at=started_at,
                 finished_at=datetime.now(),
                 error_message=str(exc),
+                connection_id=target.connection.id,
+                connection_name=target.connection.name,
+                engine=target.connection.engine,
+                target_schema=target.schema,
+                target_table=target.table,
             )
 
         self._record_and_notify(result)
@@ -121,17 +168,21 @@ class SyncEngine:
         job_health = self._load_job_health()
         jobs: list[dict[str, Any]] = []
         for file_config in self.config.files:
-            table = normalize_identifier(file_config.target.table, "table")
-            schema = normalize_identifier(file_config.target.schema or self.config.database.schema, "schema")
-            table_name = f"{schema}.{table}"
-            latest = latest_logs.get((file_config.name, table_name))
-            health = job_health.get((file_config.name, table_name), {})
+            target = self._target_context(file_config)
+            key = (file_config.name, *target.log_key)
+            latest = latest_logs.get(key)
+            health = job_health.get(key, {})
             jobs.append(
                 {
                     "name": file_config.name,
                     "enabled": file_config.enabled,
                     "source_type": file_config.source.type,
-                    "table": table_name,
+                    "table": target.table_name,
+                    "connection_id": target.connection.id,
+                    "connection_name": target.connection.name,
+                    "engine": target.connection.engine,
+                    "target_schema": target.schema,
+                    "target_table": target.table,
                     "sync_mode": file_config.sync_mode,
                     "cron": file_config.cron,
                     "crons": file_config.crons or ([file_config.cron] if file_config.cron else []),
@@ -144,12 +195,8 @@ class SyncEngine:
 
     def recent_logs(self, limit: int = 100) -> list[dict[str, Any]]:
         """Return recent sync logs."""
-        if not self.config.logging.log_to_db:
-            return []
         try:
-            self.db.ensure_sync_log_table()
-            logs = self.db.get_recent_logs(limit)
-            return [_json_safe_log(row) for row in logs]
+            return [_json_safe_log(row) for row in self.state.get_recent_logs(limit)]
         except Exception as exc:
             LOGGER.info("Could not load recent sync logs for status view: %s", exc)
             return []
@@ -157,36 +204,41 @@ class SyncEngine:
     def _run_one(
         self,
         file_config: SyncFileConfig,
-        schema: str,
-        table: str,
-        primary_key: list[str],
+        target: TargetContext,
+        client: SqlTargetClient,
         started_at: datetime,
         *,
         force: bool,
     ) -> SyncResult:
         """Execute one sync job."""
         if not file_config.enabled:
-            return self._result(file_config, schema, table, "skipped", 0, "Job is disabled.", started_at)
+            return self._result(
+                file_config,
+                target,
+                "skipped",
+                0,
+                "Job is disabled.",
+                started_at,
+            )
 
-        if self.config.logging.log_to_db:
-            self._ensure_sync_log_table()
         self._run_cleanup()
         self._progress(file_config.name, "downloading" if file_config.source.type == "onedrive" else "resolving")
-        source = self._prepare_source(file_config, table)
+        source = self._prepare_source(file_config, target.table)
         try:
             self._progress(file_config.name, "hashing")
             file_hash = calculate_md5(source.path)
             file_path = str(source.path)
-            if file_config.skip_unchanged and not force and self.config.logging.log_to_db:
-                last_hash = self._db_call(
-                    lambda: self.db.get_last_success_hash(file_config.name, f"{schema}.{table}"),
-                    "load latest success hash",
+            if file_config.skip_unchanged and not force:
+                last_hash = self.state.get_last_success_hash(
+                    job_name=file_config.name,
+                    connection_id=target.connection.id,
+                    target_schema=target.schema,
+                    target_table=target.table,
                 )
                 if last_hash == file_hash:
                     return self._result(
                         file_config,
-                        schema,
-                        table,
+                        target,
                         "skipped",
                         0,
                         "File unchanged; import skipped.",
@@ -215,17 +267,16 @@ class SyncEngine:
             if not list(dataframe.columns):
                 raise ValueError("Source file has no columns.")
             if file_config.sync_mode == "upsert":
-                validate_upsert_dataframe(dataframe, primary_key)
+                validate_upsert_dataframe(dataframe, target.primary_key)
 
             self._progress(file_config.name, "validating")
-            table_exists = self._db_call(lambda: self.db.table_exists(schema, table), "check table existence")
+            table_exists = self._db_call(lambda: client.table_exists(target.schema, target.table), "check table existence")
             if not table_exists:
                 self._progress(file_config.name, "importing")
-                rows = self._replace_table(schema, table, dataframe, primary_key, file_config.sync_mode)
+                rows = self._replace_table(client, target, dataframe, file_config.sync_mode)
                 return self._result(
                     file_config,
-                    schema,
-                    table,
+                    target,
                     "success",
                     rows,
                     f"Created table and imported {rows} row(s).",
@@ -235,26 +286,31 @@ class SyncEngine:
                     file_path=file_path,
                 )
 
-            compare_result = compare_columns(list(dataframe.columns), self._db_call(lambda: self.db.get_columns(schema, table), "load table schema"))
+            compare_result = compare_dataframe_to_columns(
+                dataframe,
+                self._db_call(lambda: client.get_columns(target.schema, target.table), "load table schema"),
+                engine=target.connection.engine,
+            )
             if compare_result.has_mismatch:
                 details = {
                     "missing_in_db": compare_result.missing_in_db,
                     "extra_in_db": compare_result.extra_in_db,
+                    "type_mismatches": compare_result.type_mismatches,
                     "source_path": file_path,
                 }
                 LOGGER.warning(
-                    "[%s] Schema mismatch. missing_in_db=%s extra_in_db=%s",
+                    "[%s] Schema mismatch. missing_in_db=%s extra_in_db=%s type_mismatches=%s",
                     file_config.name,
                     compare_result.missing_in_db,
                     compare_result.extra_in_db,
+                    compare_result.type_mismatches,
                 )
                 if file_config.on_column_mismatch == "auto_recreate":
                     self._progress(file_config.name, "importing")
-                    rows = self._replace_table(schema, table, dataframe, primary_key, file_config.sync_mode)
+                    rows = self._replace_table(client, target, dataframe, file_config.sync_mode)
                     return self._result(
                         file_config,
-                        schema,
-                        table,
+                        target,
                         "success",
                         rows,
                         f"Recreated table after schema mismatch and imported {rows} row(s).",
@@ -271,8 +327,7 @@ class SyncEngine:
                 )
                 return self._result(
                     file_config,
-                    schema,
-                    table,
+                    target,
                     status,
                     0,
                     message,
@@ -284,24 +339,26 @@ class SyncEngine:
 
             self._progress(file_config.name, "importing")
             if file_config.sync_mode == "truncate_insert":
-                rows = self._db_call(lambda: self.db.truncate_insert(schema, table, dataframe), "truncate and insert")
+                rows = self._db_call(lambda: client.truncate_insert(target.schema, target.table, dataframe), "truncate and insert")
                 message = f"Truncated table and imported {rows} row(s)."
             elif file_config.sync_mode == "drop_recreate":
-                rows = self._replace_table(schema, table, dataframe, primary_key, file_config.sync_mode)
+                rows = self._replace_table(client, target, dataframe, file_config.sync_mode)
                 message = f"Recreated table and imported {rows} row(s)."
             elif file_config.sync_mode == "append":
-                rows = self._db_call(lambda: self.db.append_insert(schema, table, dataframe), "append rows")
+                rows = self._db_call(lambda: client.append_insert(target.schema, target.table, dataframe), "append rows")
                 message = f"Appended {rows} row(s)."
             elif file_config.sync_mode == "upsert":
-                rows = self._db_call(lambda: self.db.upsert_insert(schema, table, dataframe, primary_key), "upsert rows")
+                rows = self._db_call(
+                    lambda: client.upsert_insert(target.schema, target.table, dataframe, target.primary_key),
+                    "upsert rows",
+                )
                 message = f"Upserted {rows} row(s)."
             else:
                 raise NotImplementedError(f"Unsupported sync mode: {file_config.sync_mode}")
 
             return self._result(
                 file_config,
-                schema,
-                table,
+                target,
                 "success",
                 rows,
                 message,
@@ -334,51 +391,86 @@ class SyncEngine:
 
     def _replace_table(
         self,
-        schema: str,
-        table: str,
+        client: SqlTargetClient,
+        target: TargetContext,
         dataframe: Any,
-        primary_key: list[str],
         sync_mode: str,
     ) -> int:
         """Replace a target table and preserve upsert conflict keys when needed."""
-        unique_columns = primary_key if sync_mode == "upsert" else None
+        unique_columns = target.primary_key if sync_mode == "upsert" else None
         return self._db_call(
-            lambda: self.db.replace_table(schema, table, dataframe, unique_columns),
+            lambda: client.replace_table(target.schema, target.table, dataframe, unique_columns),
             "replace table",
         )
-
-    def _ensure_sync_log_table(self) -> None:
-        """Ensure sync_log exists."""
-        self._db_call(self.db.ensure_sync_log_table, "ensure sync_log table")
 
     def _db_call(self, operation: Any, label: str) -> Any:
         """Run a database operation with retry."""
         return run_with_retry(operation, self.config.retry.db, label=label, logger=LOGGER)
 
+    def _target_client(self, connection_config: DatabaseConnectionConfig) -> SqlTargetClient:
+        """Return a cached SQL target client for a named connection."""
+        client = self._target_clients.get(connection_config.id)
+        if client is None:
+            client = create_sql_target_client(connection_config)
+            self._target_clients[connection_config.id] = client
+        return client
+
+    def _target_context(self, file_config: SyncFileConfig) -> TargetContext:
+        """Resolve target connection, identifiers, and primary key for a job."""
+        connection_config = connection_by_id(self.config, file_config.target.connection_id or "default")
+        return TargetContext(
+            connection=connection_config,
+            schema=normalize_identifier(file_config.target.schema or connection_config.schema, "schema"),
+            table=normalize_identifier(file_config.target.table, "table"),
+            primary_key=[normalize_identifier(column, "column") for column in file_config.target.primary_key],
+        )
+
     def _record_and_notify(self, result: SyncResult) -> None:
         """Persist and notify a result without masking the sync outcome."""
-        if not self.config.logging.log_to_db:
-            self.notifier.notify_result(result)
-            return
         try:
-            self._ensure_sync_log_table()
-            self._db_call(
-                lambda: self.db.insert_sync_log(
-                    job_name=result.name,
-                    table_name=result.table,
-                    started_at=result.started_at,
-                    finished_at=result.finished_at,
-                    status=result.status,
-                    rows_imported=result.rows_imported,
-                    file_hash=result.file_hash,
-                    file_path=result.file_path,
-                    error_message=result.error_message,
-                    details=result.details,
-                ),
-                "insert sync log",
+            self.state.insert_sync_log(
+                job_name=result.name,
+                connection_id=result.connection_id,
+                connection_name=result.connection_name,
+                engine=result.engine,
+                target_schema=result.target_schema,
+                target_table=result.target_table,
+                table_name=result.table,
+                started_at=result.started_at,
+                finished_at=result.finished_at,
+                status=result.status,
+                rows_imported=result.rows_imported,
+                file_hash=result.file_hash,
+                file_path=result.file_path,
+                error_message=result.error_message,
+                details=result.details,
             )
         except Exception as exc:
-            LOGGER.warning("Could not write sync_log for %s: %s", result.name, exc)
+            LOGGER.warning("Could not write local sync state for %s: %s", result.name, exc)
+
+        if self.config.logging.log_to_db and result.engine == "postgresql":
+            try:
+                connection_config = connection_by_id(self.config, result.connection_id)
+                client = self._target_client(connection_config)
+                if isinstance(client, PostgresClient):
+                    self._db_call(client.ensure_sync_log_table, "ensure target sync_log table")
+                    self._db_call(
+                        lambda: client.insert_sync_log(
+                            job_name=result.name,
+                            table_name=result.table,
+                            started_at=result.started_at,
+                            finished_at=result.finished_at,
+                            status=result.status,
+                            rows_imported=result.rows_imported,
+                            file_hash=result.file_hash,
+                            file_path=result.file_path,
+                            error_message=result.error_message,
+                            details=result.details,
+                        ),
+                        "insert target sync log",
+                    )
+            except Exception as exc:
+                LOGGER.warning("Could not write target-side sync_log for %s: %s", result.name, exc)
 
         self.notifier.notify_result(result)
 
@@ -386,14 +478,10 @@ class SyncEngine:
         """Best-effort cleanup for sync_log and local cache folders."""
         if not self.config.maintenance.enabled:
             return
-        if self.config.logging.log_to_db:
-            try:
-                self._db_call(
-                    lambda: self.db.cleanup_sync_log(self.config.maintenance.sync_log_retention_days),
-                    "cleanup sync_log",
-                )
-            except Exception as exc:
-                LOGGER.info("Could not cleanup sync_log: %s", exc)
+        try:
+            self.state.cleanup_sync_log(self.config.maintenance.sync_log_retention_days)
+        except Exception as exc:
+            LOGGER.info("Could not cleanup local sync state: %s", exc)
         _cleanup_folder(_resolve_source_path(self.config.downloads.dir, self.config.base_dir), self.config.maintenance.downloads_retention_days)
         _cleanup_folder(self.config.base_dir / "uploads", self.config.maintenance.uploads_retention_days)
         _cleanup_folder(self.config.base_dir / ".preview_cache", self.config.maintenance.preview_cache_retention_days)
@@ -407,33 +495,30 @@ class SyncEngine:
         except Exception as exc:
             LOGGER.debug("Progress callback failed for %s=%s: %s", job_name, state, exc)
 
-    def _load_latest_logs(self) -> dict[tuple[str, str], dict[str, Any]]:
+    def _load_latest_logs(self) -> dict[tuple[str, str, str, str], dict[str, Any]]:
         """Load latest logs if the database is reachable."""
-        if not self.config.logging.log_to_db:
-            return {}
         try:
-            self.db.ensure_sync_log_table()
-            return self.db.get_latest_job_logs()
+            return self.state.get_latest_job_logs()
         except Exception as exc:
             LOGGER.info("Could not load latest job logs for status view: %s", exc)
             return {}
 
-    def _load_job_health(self) -> dict[tuple[str, str], dict[str, Any]]:
+    def _load_job_health(self) -> dict[tuple[str, str, str, str], dict[str, Any]]:
         """Compute lightweight per-job health metrics from recent sync_log rows."""
-        if not self.config.logging.log_to_db:
-            return {}
         try:
-            self.db.ensure_sync_log_table()
-            rows = self.db.get_job_log_history()
+            rows = self.state.get_job_log_history()
         except Exception as exc:
             LOGGER.info("Could not load job health metrics: %s", exc)
             return {}
 
-        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
         for row in rows:
-            grouped.setdefault((row["job_name"], row["table_name"]), []).append(row)
+            grouped.setdefault(
+                (row["job_name"], row["connection_id"], row["target_schema"], row["target_table"]),
+                [],
+            ).append(row)
 
-        health: dict[tuple[str, str], dict[str, Any]] = {}
+        health: dict[tuple[str, str, str, str], dict[str, Any]] = {}
         for key, history in grouped.items():
             durations = [_duration_seconds(row) for row in history]
             durations = [value for value in durations if value is not None]
@@ -456,8 +541,7 @@ class SyncEngine:
     @staticmethod
     def _result(
         file_config: SyncFileConfig,
-        schema: str,
-        table: str,
+        target: TargetContext,
         status: str,
         rows_imported: int,
         message: str,
@@ -469,9 +553,12 @@ class SyncEngine:
     ) -> SyncResult:
         """Build a SyncResult."""
         error_message = message if status == "failed" else None
+        result_details = dict(details or {})
+        result_details.setdefault("connection_id", target.connection.id)
+        result_details.setdefault("engine", target.connection.engine)
         return SyncResult(
             name=file_config.name,
-            table=f"{schema}.{table}",
+            table=target.table_name,
             status=status,
             rows_imported=rows_imported,
             message=message,
@@ -480,7 +567,12 @@ class SyncEngine:
             file_hash=file_hash,
             file_path=file_path,
             error_message=error_message,
-            details=details or {},
+            connection_id=target.connection.id,
+            connection_name=target.connection.name,
+            engine=target.connection.engine,
+            target_schema=target.schema,
+            target_table=target.table,
+            details=result_details,
         )
 
 
@@ -511,6 +603,16 @@ def _duration_seconds(row: dict[str, Any]) -> float | None:
     finished_at = row.get("finished_at")
     if not started_at or not finished_at:
         return None
+    if isinstance(started_at, str):
+        try:
+            started_at = datetime.fromisoformat(started_at)
+        except ValueError:
+            return None
+    if isinstance(finished_at, str):
+        try:
+            finished_at = datetime.fromisoformat(finished_at)
+        except ValueError:
+            return None
     try:
         return max(0.0, round((finished_at - started_at).total_seconds(), 2))
     except AttributeError:

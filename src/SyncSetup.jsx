@@ -1,15 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Archive,
   Bell,
   ChevronLeft,
   ChevronRight,
   Clock3,
   Copy,
-  Database,
   Eye,
   FileSpreadsheet,
-  FolderOpen,
   Link2,
   Pencil,
   Play,
@@ -22,6 +19,10 @@ import {
 } from "lucide-react";
 import { SYNC_API_URL, syncApi } from "./SyncMonitor.jsx";
 import { ConfigActions, DryRunDiffPanel, SetupNoticeToast, UpdateSection } from "./SyncSetupUi.jsx";
+import BackupRestore from "./syncSetup/BackupRestore.jsx";
+import ConnectionEditor from "./syncSetup/ConnectionEditor.jsx";
+import JobEditor from "./syncSetup/JobEditor.jsx";
+import Wizard from "./syncSetup/Wizard.jsx";
 
 const DEFAULT_CONFIG = {
   database: {
@@ -44,7 +45,7 @@ const DEFAULT_CONFIG = {
   updates: {
     enabled: false,
     repo: "",
-    current_version: "1.0.5",
+    current_version: "1.0.6",
     asset_pattern: "PowerBIDataDTL-portable.zip",
     check_on_startup: true,
     auto_download: false,
@@ -104,12 +105,89 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function defaultConnectionFromDatabase(database = DEFAULT_CONFIG.database) {
+  return {
+    id: "default",
+    name: "PostgreSQL local",
+    engine: "postgresql",
+    host: database.host || "localhost",
+    port: database.port ?? 5432,
+    database: database.name || "powerbi_data",
+    user: database.user || "postgres",
+    password: database.password || "",
+    schema: database.schema || "public",
+    driver: "ODBC Driver 18 for SQL Server",
+    trusted_connection: false,
+    encrypt: true,
+    trust_server_certificate: true,
+  };
+}
+
+function normalizeConnection(connection, index = 0, legacyDatabase = DEFAULT_CONFIG.database) {
+  const engine = connection?.engine === "sqlserver" ? "sqlserver" : "postgresql";
+  const fallback = index === 0 ? defaultConnectionFromDatabase(legacyDatabase) : {
+    id: `sql_server_${index + 1}`,
+    name: `SQL server ${index + 1}`,
+    engine,
+    host: "localhost",
+    port: engine === "sqlserver" ? 1433 : 5432,
+    database: "",
+    user: "",
+    password: "",
+    schema: engine === "sqlserver" ? "dbo" : "public",
+    driver: "ODBC Driver 18 for SQL Server",
+    trusted_connection: false,
+    encrypt: true,
+    trust_server_certificate: true,
+  };
+  return {
+    ...fallback,
+    ...(connection || {}),
+    engine,
+    id: String(connection?.id || fallback.id).trim(),
+    name: String(connection?.name || fallback.name).trim(),
+    host: String(connection?.host || fallback.host).trim(),
+    port: toNumber(connection?.port ?? fallback.port, fallback.port),
+    database: String(connection?.database || fallback.database).trim(),
+    user: String(connection?.user ?? fallback.user).trim(),
+    password: String(connection?.password ?? fallback.password),
+    schema: String(connection?.schema || fallback.schema).trim(),
+    driver: String(connection?.driver || "ODBC Driver 18 for SQL Server"),
+    trusted_connection: Boolean(connection?.trusted_connection),
+    encrypt: connection?.encrypt ?? true,
+    trust_server_certificate: connection?.trust_server_certificate ?? true,
+  };
+}
+
+function normalizeConnections(value, legacyDatabase = DEFAULT_CONFIG.database) {
+  const raw = Array.isArray(value) ? value : [];
+  const normalized = raw.map((connection, index) => normalizeConnection(connection, index, legacyDatabase));
+  if (!normalized.some((connection) => connection.id === "default")) {
+    normalized.unshift(defaultConnectionFromDatabase(legacyDatabase));
+  }
+  return normalized.length ? normalized : [defaultConnectionFromDatabase(legacyDatabase)];
+}
+
+function connectionById(connections, connectionId = "default", fallbackDatabase = DEFAULT_CONFIG.database) {
+  const items = Array.isArray(connections) ? connections : [];
+  return items.find((connection) => connection.id === connectionId)
+    || items[0]
+    || defaultConnectionFromDatabase(fallbackDatabase);
+}
+
+function connectionOptionLabel(connection) {
+  return `${connection.name || connection.id} (${connection.engine})`;
+}
+
 function normalizeConfig(config) {
   const data = config && typeof config === "object" ? config : {};
+  const database = { ...DEFAULT_CONFIG.database, ...(data.database || {}) };
+  const databaseConnections = normalizeConnections(data.database_connections, database);
   const normalized = {
     ...clone(DEFAULT_CONFIG),
     ...data,
-    database: { ...DEFAULT_CONFIG.database, ...(data.database || {}) },
+    database,
+    database_connections: databaseConnections,
     schedule: { ...DEFAULT_CONFIG.schedule, ...(data.schedule || {}) },
     downloads: { ...DEFAULT_CONFIG.downloads, ...(data.downloads || {}) },
     updates: { ...DEFAULT_CONFIG.updates, ...(data.updates || {}) },
@@ -133,7 +211,13 @@ function normalizeConfig(config) {
       },
     },
     logging: { ...DEFAULT_CONFIG.logging, ...(data.logging || {}) },
-    files: Array.isArray(data.files) ? data.files.map((file, index) => normalizeFile(file, index, data.database?.schema)) : [],
+    files: Array.isArray(data.files)
+      ? data.files.map((file, index) => {
+        const connectionId = file?.target?.connection_id || "default";
+        const connection = connectionById(databaseConnections, connectionId, database);
+        return normalizeFile(file, index, connection?.schema || database.schema, connection?.id || "default");
+      })
+      : [],
   };
   normalized.api.cors_origins = asStringList(normalized.api.cors_origins);
   normalized.notifications.email.recipients = asStringList(normalized.notifications.email.recipients);
@@ -141,7 +225,7 @@ function normalizeConfig(config) {
   return normalized;
 }
 
-function normalizeFile(file, index, schema = "public") {
+function normalizeFile(file, index, schema = "public", connectionId = "default") {
   return {
     name: file?.name || `Sync job ${index + 1}`,
     enabled: file?.enabled ?? true,
@@ -152,6 +236,7 @@ function normalizeFile(file, index, schema = "public") {
       download_url: file?.source?.download_url || "",
     },
     target: {
+      connection_id: file?.target?.connection_id || connectionId || "default",
       table: file?.target?.table || "new_table",
       schema: file?.target?.schema || schema || "public",
       primary_key: asStringList(file?.target?.primary_key),
@@ -175,11 +260,30 @@ function normalizeFile(file, index, schema = "public") {
 }
 
 function validateSyncConfig(config) {
-  const jobs = (config?.files || []).map((file, index) => validateJobConfig(file, index));
   const errors = [];
+  const connections = config?.database_connections || [];
+  const connectionIds = new Set();
   if (!String(config?.database?.host || "").trim()) errors.push("Thiếu database host.");
   if (!String(config?.database?.name || "").trim()) errors.push("Thiếu database name.");
   if (!String(config?.database?.user || "").trim()) errors.push("Thiếu database user.");
+  for (const connection of connections) {
+    const id = String(connection?.id || "").trim();
+    if (!id) {
+      errors.push("Mỗi SQL server cần có id.");
+    } else if (!IDENTIFIER_PATTERN.test(id)) {
+      errors.push(`SQL server id "${id}" sai định dạng.`);
+    } else if (connectionIds.has(id)) {
+      errors.push(`SQL server id "${id}" bị trùng.`);
+    }
+    connectionIds.add(id);
+    if (!["postgresql", "sqlserver"].includes(connection?.engine)) errors.push(`Engine của ${id || "SQL server"} không hợp lệ.`);
+    if (!String(connection?.host || "").trim()) errors.push(`Thiếu host cho ${id || "SQL server"}.`);
+    if (!String(connection?.database || "").trim()) errors.push(`Thiếu database cho ${id || "SQL server"}.`);
+    if (!connection?.trusted_connection && !String(connection?.user || "").trim()) errors.push(`Thiếu user cho ${id || "SQL server"}.`);
+    if (!String(connection?.schema || "").trim()) errors.push(`Thiếu schema cho ${id || "SQL server"}.`);
+  }
+  if (!connectionIds.has("default")) errors.push('Cần có SQL server id "default".');
+  const jobs = (config?.files || []).map((file, index) => validateJobConfig(file, index, connectionIds));
   const invalidJobs = jobs.filter((job) => job.messages.length).length;
   return {
     errors,
@@ -189,7 +293,7 @@ function validateSyncConfig(config) {
   };
 }
 
-function validateJobConfig(file, index = 0) {
+function validateJobConfig(file, index = 0, connectionIds = null) {
   const messages = [];
   const fields = {};
   const source = file?.source || {};
@@ -198,6 +302,7 @@ function validateJobConfig(file, index = 0) {
   const table = String(target.table || "").trim();
   const schema = String(target.schema || "").trim();
   const crons = normalizeCronList(file?.crons, file?.cron);
+  const connectionId = String(target.connection_id || "default");
 
   if (!String(file?.name || "").trim()) {
     fields.name = "Tên job không được để trống.";
@@ -221,6 +326,10 @@ function validateJobConfig(file, index = 0) {
   if (schema && !IDENTIFIER_PATTERN.test(schema)) {
     fields.schema = "Schema chỉ dùng chữ, số, dấu gạch dưới và không bắt đầu bằng số.";
     messages.push(fields.schema);
+  }
+  if (connectionIds && !connectionIds.has(connectionId)) {
+    fields.connection_id = `Server import "${connectionId}" không tồn tại.`;
+    messages.push(fields.connection_id);
   }
   const invalidCron = crons.find((cron) => !isValidCron(cron));
   if (invalidCron) {
@@ -321,8 +430,8 @@ function jobCronLabel(file) {
   return crons.length === 1 ? "1 lịch" : "Chưa đặt lịch";
 }
 
-function defaultNewJob(index, schema = "public") {
-  return normalizeFile({ name: `Sync job ${index + 1}` }, index, schema);
+function defaultNewJob(index, schema = "public", connectionId = "default") {
+  return normalizeFile({ name: `Sync job ${index + 1}` }, index, schema, connectionId);
 }
 
 function selectedPreviewSheet(preview, sheetValue) {
@@ -477,6 +586,16 @@ function CronEditor({ label, value, onChange }) {
   );
 }
 
+function ConnectionSelect({ value, connections, onChange }) {
+  return (
+    <select value={value || "default"} onChange={(event) => onChange(event.target.value)}>
+      {(connections || []).map((connection) => (
+        <option key={connection.id} value={connection.id}>{connectionOptionLabel(connection)}</option>
+      ))}
+    </select>
+  );
+}
+
 function CronListEditor({ label, value, onChange }) {
   const crons = normalizeCronList(value);
 
@@ -525,8 +644,8 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isImportingBundle, setIsImportingBundle] = useState(false);
-  const [isTestingDb, setIsTestingDb] = useState(false);
-  const [isTestingWrite, setIsTestingWrite] = useState(false);
+  const [testingDbId, setTestingDbId] = useState("");
+  const [testingWriteId, setTestingWriteId] = useState("");
   const [isTestingWebhook, setIsTestingWebhook] = useState(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isDownloadingUpdate, setIsDownloadingUpdate] = useState(false);
@@ -560,6 +679,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
   );
   const validation = useMemo(() => validateSyncConfig(configData), [configData]);
   const setupTab = controlledSetupTab || localSetupTab;
+  const isTestingWrite = Boolean(testingWriteId);
 
   function setSetupTab(tab) {
     if (onSetupTabChange) {
@@ -682,37 +802,42 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
     }
   }
 
-  async function testDatabase() {
+  async function testDatabase(connectionId = "default") {
     if (!configData) return;
-    setIsTestingDb(true);
+    setTestingDbId(connectionId);
     setError("");
     try {
       const result = await syncApi("/api/config/test-db", {
         method: "POST",
-        body: JSON.stringify({ config: configData }),
+        body: JSON.stringify({ config: configData, connection_id: connectionId }),
       });
-      setMessage(result.message || "Kết nối PostgreSQL thành công.");
+      setMessage(result.message || "Kết nối SQL server thành công.");
     } catch (testError) {
       setError(`Test database lỗi: ${testError.message}`);
     } finally {
-      setIsTestingDb(false);
+      setTestingDbId("");
     }
   }
 
-  async function testWritePermission(schema = configData?.database?.schema) {
+  async function testWritePermission(connectionId = "default", schema = null) {
     if (!configData) return;
-    setIsTestingWrite(true);
+    const connection = connectionById(configData.database_connections, connectionId, configData.database);
+    setTestingWriteId(connection?.id || connectionId || "default");
     setError("");
     try {
       const result = await syncApi("/api/config/test-write", {
         method: "POST",
-        body: JSON.stringify({ config: configData, schema }),
+        body: JSON.stringify({
+          config: configData,
+          connection_id: connection?.id || "default",
+          schema: schema || connection?.schema || "public",
+        }),
       });
       setMessage(result.message || "User có quyền ghi vào schema.");
     } catch (testError) {
       setError(`Test quyền ghi lỗi: ${testError.message}`);
     } finally {
-      setIsTestingWrite(false);
+      setTestingWriteId("");
     }
   }
 
@@ -918,7 +1043,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
       });
       const typePreview = (result.columns || [])
         .slice(0, 5)
-        .map((column) => `${column.name}:${column.postgres_type}`)
+        .map((column) => `${column.name}:${column.target_type || column.postgres_type}`)
         .join(", ");
       setJobFeedback((current) => ({
         ...current,
@@ -977,10 +1102,108 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
     }));
   }
 
+  function syncLegacyDatabaseFromDefault(config) {
+    const defaultConnection = (config?.database_connections || []).find((connection) => connection.id === "default");
+    if (!defaultConnection || defaultConnection.engine !== "postgresql") return config;
+    return {
+      ...config,
+      database: {
+        ...(config?.database || {}),
+        host: defaultConnection.host,
+        port: defaultConnection.port,
+        name: defaultConnection.database,
+        user: defaultConnection.user,
+        password: defaultConnection.password,
+        schema: defaultConnection.schema,
+      },
+    };
+  }
+
+  function connectionUsageCount(connectionId, sourceConfig = configData) {
+    return (sourceConfig?.files || []).filter((file) => (file.target?.connection_id || "default") === connectionId).length;
+  }
+
+  function addConnection(engine = "postgresql") {
+    setIsDirty(true);
+    setConfigData((current) => {
+      const existing = current?.database_connections || [];
+      const prefix = engine === "sqlserver" ? "sqlserver" : "postgres";
+      let index = existing.length + 1;
+      let id = `${prefix}_${index}`;
+      const ids = new Set(existing.map((connection) => connection.id));
+      while (ids.has(id)) {
+        index += 1;
+        id = `${prefix}_${index}`;
+      }
+      const connection = normalizeConnection({
+        id,
+        name: engine === "sqlserver" ? `SQL Server ${index}` : `PostgreSQL ${index}`,
+        engine,
+        port: engine === "sqlserver" ? 1433 : 5432,
+        schema: engine === "sqlserver" ? "dbo" : "public",
+      }, index, current?.database);
+      return { ...current, database_connections: [...existing, connection] };
+    });
+  }
+
+  function patchConnection(index, patch) {
+    setIsDirty(true);
+    setConfigData((current) => {
+      const connections = [...(current?.database_connections || [])];
+      const currentConnection = connections[index] || normalizeConnection({}, index, current?.database);
+      const nextEngine = patch.engine || currentConnection.engine;
+      const nextConnection = normalizeConnection({
+        ...currentConnection,
+        ...patch,
+        port: patch.engine && patch.engine !== currentConnection.engine ? (nextEngine === "sqlserver" ? 1433 : 5432) : (patch.port ?? currentConnection.port),
+        schema: patch.engine && patch.engine !== currentConnection.engine ? (nextEngine === "sqlserver" ? "dbo" : "public") : (patch.schema ?? currentConnection.schema),
+      }, index, current?.database);
+      connections[index] = nextConnection;
+      return syncLegacyDatabaseFromDefault({ ...current, database_connections: connections });
+    });
+  }
+
+  function removeConnection(index) {
+    const connection = configData?.database_connections?.[index];
+    if (!connection) return;
+    const usage = connectionUsageCount(connection.id);
+    if (usage > 0) {
+      setError(`Không thể xóa ${connection.name}: đang được ${usage} job sử dụng.`);
+      return;
+    }
+    if ((configData?.database_connections || []).length <= 1) {
+      setError("Cần giữ lại ít nhất một SQL server.");
+      return;
+    }
+    if (!window.confirm(`Xóa SQL server "${connection.name}"?`)) return;
+    setIsDirty(true);
+    setConfigData((current) => ({
+      ...current,
+      database_connections: (current?.database_connections || []).filter((_, connectionIndex) => connectionIndex !== index),
+    }));
+  }
+
+  function selectJobConnection(index, connectionId) {
+    const connection = connectionById(configData?.database_connections, connectionId, configData?.database);
+    patchJobNested(index, "target", {
+      connection_id: connectionId,
+      schema: connection?.schema || "public",
+    });
+  }
+
+  function selectWizardConnection(connectionId) {
+    const connection = connectionById(configData?.database_connections, connectionId, configData?.database);
+    patchWizardNested("target", {
+      connection_id: connectionId,
+      schema: connection?.schema || "public",
+    });
+  }
+
   function addJob() {
     const files = configData?.files || [];
+    const connection = connectionById(configData?.database_connections, "default", configData?.database);
     setSetupTab("jobs");
-    setWizardJob(defaultNewJob(files.length, configData?.database?.schema));
+    setWizardJob(defaultNewJob(files.length, connection.schema, connection.id));
     setWizardPreview(null);
     setWizardMessage("");
     setWizardDryRun(null);
@@ -1234,17 +1457,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
       {configData && (
         <div className="setupLayout">
           {setupTab === "jobs" && wizardOpen && wizardJob && (
-            <section className="setupSection wizardPanel">
-              <div className="wizardHeader">
-                <div>
-                  <p className="eyebrow">Thêm tác vụ đồng bộ</p>
-                  <h3>Chọn nguồn → Xem trước → Ghép cột vào bảng</h3>
-                </div>
-                <button type="button" className="secondaryButton" onClick={() => setWizardOpen(false)}>
-                  Đóng
-                </button>
-              </div>
-
+            <Wizard onClose={() => setWizardOpen(false)}>
               <div className="wizardStepper">
                 {[
                   { step: 1, label: "Chọn nguồn" },
@@ -1417,6 +1630,14 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       <input value={wizardJob.name || ""} onChange={(event) => patchWizardJob({ name: event.target.value })} />
                     </label>
                     <label>
+                      Server import
+                      <ConnectionSelect
+                        value={wizardJob.target?.connection_id || "default"}
+                        connections={configData.database_connections}
+                        onChange={selectWizardConnection}
+                      />
+                    </label>
+                    <label>
                       Schema đích
                       <input value={wizardJob.target?.schema || ""} onChange={(event) => patchWizardNested("target", { schema: event.target.value })} />
                     </label>
@@ -1479,7 +1700,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     <DryRunDiffPanel result={wizardDryRun} />
                   )}
                   <div className="wizardActions">
-                    <button type="button" className="secondaryButton" onClick={() => testWritePermission(wizardJob.target?.schema || configData.database.schema)} disabled={isTestingWrite}>
+                    <button type="button" className="secondaryButton" onClick={() => testWritePermission(wizardJob.target?.connection_id || "default", wizardJob.target?.schema)} disabled={isTestingWrite}>
                       <Play size={16} aria-hidden="true" />
                       Test quyền ghi bảng
                     </button>
@@ -1498,65 +1719,29 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                   </div>
                 </div>
               )}
-            </section>
+            </Wizard>
           )}
 
           {setupTab === "system" && (
           <>
-          <section className="setupSection">
-            <div className="sectionTitle withAction">
-              <div>
-                <Database size={18} aria-hidden="true" />
-                <h3>PostgreSQL</h3>
-              </div>
-              <ConfigActions
-                isDirty={isDirty}
-                isLoading={isLoading}
-                isSaving={isSaving}
-                canSave={Boolean(configData) && !validation.hasErrors}
-                onReload={loadConfig}
-                onSave={saveConfig}
-                leading={(
-                  <>
-                    <button type="button" className="secondaryButton" onClick={testDatabase} disabled={isTestingDb}>
-                      <Play size={16} aria-hidden="true" />
-                      {isTestingDb ? "Đang test" : "Test kết nối"}
-                    </button>
-                    <button type="button" className="secondaryButton" onClick={() => testWritePermission()} disabled={isTestingWrite}>
-                      <Play size={16} aria-hidden="true" />
-                      {isTestingWrite ? "Đang test ghi" : "Test quyền ghi"}
-                    </button>
-                  </>
-                )}
-              />
-            </div>
-            <div className="setupGrid">
-              <label>
-                Host
-                <input value={configData.database.host || ""} onChange={(event) => patchSection("database", { host: event.target.value })} />
-              </label>
-              <label>
-                Port
-                <input type="number" min="1" value={configData.database.port ?? ""} onChange={(event) => patchSection("database", { port: toNumber(event.target.value, 5432) })} />
-              </label>
-              <label>
-                Database
-                <input value={configData.database.name || ""} onChange={(event) => patchSection("database", { name: event.target.value })} />
-              </label>
-              <label>
-                User
-                <input value={configData.database.user || ""} onChange={(event) => patchSection("database", { user: event.target.value })} />
-              </label>
-              <label>
-                Password / biến môi trường
-                <input type="password" autoComplete="off" value={configData.database.password || ""} onChange={(event) => patchSection("database", { password: event.target.value })} />
-              </label>
-              <label>
-                Schema mặc định
-                <input value={configData.database.schema || ""} onChange={(event) => patchSection("database", { schema: event.target.value })} />
-              </label>
-            </div>
-          </section>
+          <ConnectionEditor
+            configData={configData}
+            validation={validation}
+            isDirty={isDirty}
+            isLoading={isLoading}
+            isSaving={isSaving}
+            testingDbId={testingDbId}
+            testingWriteId={testingWriteId}
+            onReload={loadConfig}
+            onSave={saveConfig}
+            onAddConnection={addConnection}
+            onPatchConnection={patchConnection}
+            onRemoveConnection={removeConnection}
+            onTestDatabase={testDatabase}
+            onTestWrite={testWritePermission}
+            connectionUsageCount={connectionUsageCount}
+            toNumber={toNumber}
+          />
           </>
           )}
 
@@ -1593,7 +1778,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
               const jobErrors = validation.jobs[index]?.fields || {};
               const jobErrorMessages = validation.jobs[index]?.messages || [];
               return (
-                <article className={`jobEditor ${isEditing ? "editing" : "compact"}`} key={`job-${index}`}>
+                <JobEditor key={`job-${index}`} isEditing={isEditing}>
                   <div className="jobCompactHeader">
                     <div className="jobSummary">
                       {isEditing ? (
@@ -1608,7 +1793,9 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                       )}
                       {!isEditing && (
                         <>
-                          <span>{sourceLabel(file)} · {file.target?.schema || configData.database.schema}.{file.target?.table || "new_table"}</span>
+                          <span>
+                            {sourceLabel(file)} · {connectionById(configData.database_connections, file.target?.connection_id || "default", configData.database).name} · {file.target?.schema || "public"}.{file.target?.table || "new_table"}
+                          </span>
                           <small>{sourcePathLabel(file)}</small>
                           {jobErrorMessages.length > 0 && <small className="fieldError">{jobErrorMessages[0]}</small>}
                         </>
@@ -1748,6 +1935,15 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                     <h4>Đích import</h4>
                     <div className="setupGrid">
                       <label>
+                        Server import
+                        <ConnectionSelect
+                          value={file.target?.connection_id || "default"}
+                          connections={configData.database_connections}
+                          onChange={(connectionId) => selectJobConnection(index, connectionId)}
+                        />
+                        {jobErrors.connection_id && <small className="fieldError">{jobErrors.connection_id}</small>}
+                      </label>
+                      <label>
                         Schema đích
                         <input value={file.target?.schema || ""} onChange={(event) => patchJobNested(index, "target", { schema: event.target.value })} />
                         {jobErrors.schema && <small className="fieldError">{jobErrors.schema}</small>}
@@ -1847,7 +2043,7 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
                   )}
                     </>
                   )}
-                </article>
+                </JobEditor>
               );
             })}
           </section>
@@ -1871,73 +2067,15 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
             onRunPrimaryAction={runUpdatePrimaryAction}
           />
 
-          <section className="setupSection">
-            <div className="sectionTitle">
-              <Archive size={18} aria-hidden="true" />
-              <h3>Backup & Restore</h3>
-            </div>
-            <div className="backupActions">
-              <button type="button" className="secondaryButton" onClick={exportBundle}>
-                <Archive size={16} aria-hidden="true" />
-                Export config bundle
-              </button>
-              <label className={`secondaryButton fileActionButton ${isImportingBundle ? "disabled" : ""}`}>
-                <UploadCloud size={16} aria-hidden="true" />
-                {isImportingBundle ? "Đang import" : "Import bundle zip"}
-                <input
-                  type="file"
-                  accept=".zip,application/zip"
-                  disabled={isImportingBundle}
-                  onChange={(event) => importBundle(event.target.files?.[0])}
-                />
-              </label>
-              <button type="button" className="secondaryButton" onClick={() => openAppFolder("exports")}>
-                <FolderOpen size={16} aria-hidden="true" />
-                Mở exports
-              </button>
-            </div>
-            <p className="helperText">Bundle có thể thêm job vào cấu hình hiện tại hoặc ghi đè toàn bộ khi cần chuyển sang máy mới. Config cũ luôn được backup trước khi import.</p>
-            {pendingBundle && (
-              <div className="bundlePreview">
-                <strong>{pendingBundle.fileName}</strong>
-                <span>Config: {pendingBundle.preview.has_config ? "có" : "không"} · .env: {pendingBundle.preview.has_env ? "có" : "không"} · Uploads: {pendingBundle.preview.uploads_count || 0} · Jobs: {pendingBundle.preview.jobs_count ?? "?"}</span>
-                {pendingBundle.preview.job_names?.length > 0 && (
-                  <small>Job trong bundle: {pendingBundle.preview.job_names.slice(0, 4).join(", ")}{pendingBundle.preview.job_names.length > 4 ? "..." : ""}</small>
-                )}
-                {pendingBundle.preview.database && (
-                  <small>DB: {pendingBundle.preview.database.host}/{pendingBundle.preview.database.name} · schema {pendingBundle.preview.database.schema}</small>
-                )}
-                {pendingBundle.preview.config_error && <small className="errorText">{pendingBundle.preview.config_error}</small>}
-                <div className="bundleImportModes" role="radiogroup" aria-label="Cách import bundle">
-                  <label className="checkField">
-                    <input
-                      type="radio"
-                      name="bundleImportMode"
-                      checked={pendingBundle.mode === "merge_jobs"}
-                      onChange={() => setPendingBundle((bundle) => bundle ? { ...bundle, mode: "merge_jobs" } : bundle)}
-                    />
-                    Chỉ thêm job từ bundle
-                  </label>
-                  <label className="checkField">
-                    <input
-                      type="radio"
-                      name="bundleImportMode"
-                      checked={pendingBundle.mode === "replace"}
-                      onChange={() => setPendingBundle((bundle) => bundle ? { ...bundle, mode: "replace" } : bundle)}
-                    />
-                    Ghi đè toàn bộ setting
-                  </label>
-                </div>
-                <div className="rowActions">
-                  <button type="button" onClick={confirmImportBundle} disabled={isImportingBundle || !pendingBundle.preview.has_config || pendingBundle.preview.config_error}>
-                    <Save size={15} aria-hidden="true" />
-                    Xác nhận import
-                  </button>
-                  <button type="button" onClick={() => setPendingBundle(null)}>Hủy</button>
-                </div>
-              </div>
-            )}
-          </section>
+          <BackupRestore
+            pendingBundle={pendingBundle}
+            isImportingBundle={isImportingBundle}
+            onExportBundle={exportBundle}
+            onImportBundle={importBundle}
+            onOpenExports={() => openAppFolder("exports")}
+            onSetPendingBundle={setPendingBundle}
+            onConfirmImportBundle={confirmImportBundle}
+          />
           </>
           )}
 

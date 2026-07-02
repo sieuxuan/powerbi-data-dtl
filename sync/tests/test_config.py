@@ -47,6 +47,9 @@ files: []
             self.assertEqual(config.retry.db.attempts, 3)
             self.assertFalse(config.updates.enabled)
             self.assertTrue(config.logging.log_to_db)
+            self.assertEqual(config.database_connections[0].id, "default")
+            self.assertEqual(config.database_connections[0].engine, "postgresql")
+            self.assertEqual(config.database_connections[0].database, "powerbi_data")
 
     def test_updates_are_loaded(self) -> None:
         config_text = """
@@ -175,6 +178,115 @@ files:
       table: sample
     crons:
       - "bad cron"
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.yaml"
+            path.write_text(config_text, encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                load_config(path)
+
+    def test_database_connections_are_loaded_and_jobs_select_target(self) -> None:
+        config_text = """
+database:
+  host: localhost
+  name: powerbi_data
+  user: postgres
+database_connections:
+  - id: default
+    name: PostgreSQL local
+    engine: postgresql
+    host: localhost
+    database: powerbi_data
+    user: postgres
+    schema: public
+  - id: warehouse_sqlserver
+    name: Warehouse
+    engine: sqlserver
+    host: localhost
+    port: 1433
+    database: PowerBIData
+    user: sa
+    password: secret
+    schema: dbo
+    encrypt: true
+    trust_server_certificate: true
+files:
+  - name: sales
+    source:
+      type: local
+      path: sales.csv
+    target:
+      connection_id: warehouse_sqlserver
+      table: sales
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.yaml"
+            path.write_text(config_text, encoding="utf-8")
+            config = load_config(path)
+            self.assertEqual(len(config.database_connections), 2)
+            self.assertEqual(config.database_connections[1].engine, "sqlserver")
+            self.assertEqual(config.database_connections[1].schema, "dbo")
+            self.assertEqual(config.files[0].target.connection_id, "warehouse_sqlserver")
+            self.assertEqual(config.files[0].target.schema, "dbo")
+
+    def test_job_without_connection_id_defaults_to_default(self) -> None:
+        config_text = """
+database:
+  host: localhost
+  name: powerbi_data
+  user: postgres
+files:
+  - name: sample
+    source:
+      type: local
+      path: sample.csv
+    target:
+      table: sample
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.yaml"
+            path.write_text(config_text, encoding="utf-8")
+            config = load_config(path)
+            self.assertEqual(config.files[0].target.connection_id, "default")
+            self.assertEqual(config.files[0].target.schema, "public")
+
+    def test_unknown_connection_id_is_rejected(self) -> None:
+        config_text = """
+database:
+  host: localhost
+  name: powerbi_data
+  user: postgres
+files:
+  - name: sample
+    source:
+      type: local
+      path: sample.csv
+    target:
+      connection_id: missing
+      table: sample
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.yaml"
+            path.write_text(config_text, encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                load_config(path)
+
+    def test_duplicate_connection_id_is_rejected(self) -> None:
+        config_text = """
+database:
+  host: localhost
+  name: powerbi_data
+  user: postgres
+database_connections:
+  - id: default
+    host: localhost
+    database: powerbi_data
+    user: postgres
+  - id: default
+    host: localhost
+    database: other
+    user: postgres
+files: []
 """
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "config.yaml"

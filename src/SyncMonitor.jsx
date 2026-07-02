@@ -239,6 +239,7 @@ export default function SyncMonitor({ onEditJob, onAddJob }) {
             <tr>
               <th>Tác vụ</th>
               <th>Nguồn</th>
+              <th>Server</th>
               <th>Bảng dữ liệu</th>
               <th>Lịch chạy</th>
               <th>Trạng thái</th>
@@ -251,7 +252,7 @@ export default function SyncMonitor({ onEditJob, onAddJob }) {
           <tbody>
             {jobs.length === 0 && (
               <tr>
-                <td colSpan="9">{isLoading ? "Đang tải..." : "Chưa có tác vụ nào được cấu hình."}</td>
+                <td colSpan="10">{isLoading ? "Đang tải..." : "Chưa có tác vụ nào được cấu hình."}</td>
               </tr>
             )}
             {jobs.map((job) => {
@@ -265,6 +266,12 @@ export default function SyncMonitor({ onEditJob, onAddJob }) {
                     {latest.error_message && <small className="errorText">{latest.error_message}</small>}
                   </td>
                   <td>{job.source_type}</td>
+                  <td>
+                    <div className="stackedCell">
+                      <span>{job.connection_name || job.connection_id || "default"}</span>
+                      <small>{job.engine || "postgresql"}</small>
+                    </div>
+                  </td>
                   <td>{job.table}</td>
                   <td>
                     <div className="stackedCell">
@@ -328,6 +335,7 @@ export default function SyncMonitor({ onEditJob, onAddJob }) {
             <tr>
               <th>Thời gian</th>
               <th>Tác vụ</th>
+              <th>Server</th>
               <th>Bảng dữ liệu</th>
               <th>Trạng thái</th>
               <th>Số dòng</th>
@@ -337,13 +345,14 @@ export default function SyncMonitor({ onEditJob, onAddJob }) {
           <tbody>
             {logs.length === 0 && (
               <tr>
-                <td colSpan="6">{isLoading ? "Đang tải..." : "Chưa có lịch sử đồng bộ."}</td>
+                <td colSpan="7">{isLoading ? "Đang tải..." : "Chưa có lịch sử đồng bộ."}</td>
               </tr>
             )}
             {logs.map((row) => (
               <tr key={row.id}>
                 <td>{formatSyncDate(row.started_at)}</td>
                 <td>{row.job_name}</td>
+                <td>{row.connection_name || row.connection_id || "-"}</td>
                 <td>{row.table_name}</td>
                 <td><span className={`statusPill ${row.status}`}>{syncStatusLabel(row.status)}</span></td>
                 <td>{row.rows_imported ?? 0}</td>

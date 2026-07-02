@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from core.config import (
     ApiConfig,
     AppConfig,
     DatabaseConfig,
+    DatabaseConnectionConfig,
     DownloadsConfig,
     LoggingConfig,
     NotificationConfig,
@@ -21,6 +23,7 @@ from core.config import (
     UpdateConfig,
 )
 from core.file_reader import calculate_md5
+from core.state_store import SyncStateStore
 from core.sync_engine import SyncEngine
 
 
@@ -60,8 +63,39 @@ class SyncHashSkipTests(unittest.TestCase):
             source.write_text("id,name\n1,A\n", encoding="utf-8")
             file_hash = calculate_md5(source)
             fake_db = FakeDb(file_hash)
+            state = SyncStateStore(base_dir, "./logs")
+            state.insert_sync_log(
+                job_name="sample",
+                connection_id="default",
+                connection_name="Default PostgreSQL",
+                engine="postgresql",
+                target_schema="public",
+                target_table="sample",
+                table_name="public.sample",
+                started_at=datetime.now(),
+                finished_at=datetime.now(),
+                status="success",
+                rows_imported=1,
+                file_hash=file_hash,
+                file_path=str(source),
+                error_message=None,
+                details={},
+            )
             config = AppConfig(
                 database=DatabaseConfig(host="localhost", port=5432, name="db", user="postgres", password="", schema="public"),
+                database_connections=[
+                    DatabaseConnectionConfig(
+                        id="default",
+                        name="Default PostgreSQL",
+                        engine="postgresql",
+                        host="localhost",
+                        port=5432,
+                        database="db",
+                        user="postgres",
+                        password="",
+                        schema="public",
+                    )
+                ],
                 schedule=ScheduleConfig(),
                 files=[
                     SyncFileConfig(
@@ -84,13 +118,13 @@ class SyncHashSkipTests(unittest.TestCase):
                 base_dir=base_dir,
             )
 
-            with patch("core.sync_engine.PostgresClient", return_value=fake_db):
+            with patch("core.sync_engine.create_sql_target_client", return_value=fake_db):
                 engine = SyncEngine(config)
                 result = engine.run_by_name("sample")
 
             self.assertEqual(result.status, "skipped")
             self.assertEqual(result.details["reason"], "unchanged")
-            self.assertEqual(fake_db.logs[0]["status"], "skipped")
+            self.assertEqual(engine.recent_logs(1)[0]["status"], "skipped")
 
     def test_log_to_db_false_does_not_write_sync_log(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -100,6 +134,19 @@ class SyncHashSkipTests(unittest.TestCase):
             fake_db = FakeImportDb()
             config = AppConfig(
                 database=DatabaseConfig(host="localhost", port=5432, name="db", user="postgres", password="", schema="public"),
+                database_connections=[
+                    DatabaseConnectionConfig(
+                        id="default",
+                        name="Default PostgreSQL",
+                        engine="postgresql",
+                        host="localhost",
+                        port=5432,
+                        database="db",
+                        user="postgres",
+                        password="",
+                        schema="public",
+                    )
+                ],
                 schedule=ScheduleConfig(),
                 files=[
                     SyncFileConfig(
@@ -122,12 +169,14 @@ class SyncHashSkipTests(unittest.TestCase):
                 base_dir=base_dir,
             )
 
-            with patch("core.sync_engine.PostgresClient", return_value=fake_db):
-                result = SyncEngine(config).run_by_name("sample")
+            with patch("core.sync_engine.create_sql_target_client", return_value=fake_db):
+                engine = SyncEngine(config)
+                result = engine.run_by_name("sample")
 
             self.assertEqual(result.status, "success")
             self.assertEqual(fake_db.logs, [])
             self.assertEqual(fake_db.ensured, 0)
+            self.assertEqual(engine.recent_logs(1)[0]["status"], "success")
 
 
 if __name__ == "__main__":

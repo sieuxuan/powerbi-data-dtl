@@ -177,6 +177,8 @@ def apply_update(config: UpdateConfig, base_dir: Path, *, restart: bool = False)
         target_root=base_dir.parent,
         source_root=source_root,
         current_pid=os.getpid(),
+        tray_pid=_env_int("POWERBI_DTL_TRAY_PID"),
+        launcher_path=_launcher_path_from_env(),
         version=info.latest_version or "update",
     )
     message = f"Update staged at {source_root}. Run {script_path} to apply."
@@ -250,7 +252,7 @@ def _asset_pattern(config: UpdateConfig) -> str:
 def _current_version(config: UpdateConfig, base_dir: Path | None) -> str:
     """Read the running app version from VERSION, falling back to config."""
     if base_dir is not None:
-        for path in (base_dir / "VERSION", base_dir.parent / "sync" / "VERSION"):
+        for path in (base_dir / "VERSION", base_dir.parent / "VERSION", base_dir.parent / "sync" / "VERSION"):
             try:
                 version = path.read_text(encoding="utf-8").strip()
             except OSError:
@@ -274,17 +276,6 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 def _safe_filename(value: str) -> str:
     """Return a filesystem-safe filename."""
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", value).strip(" .") or "update.zip"
-
-
-def _unique_path(path: Path) -> Path:
-    """Avoid overwriting an existing update asset."""
-    if not path.exists():
-        return path
-    for index in range(2, 10_000):
-        candidate = path.with_name(f"{path.stem}_{index}{path.suffix}")
-        if not candidate.exists():
-            return candidate
-    raise UpdateError(f"Could not allocate update path for {path}")
 
 
 def _download_dir(config: UpdateConfig, base_dir: Path) -> Path:
@@ -325,6 +316,20 @@ def _is_portable_root(root: Path) -> bool:
     return (root / "run-portable.bat").exists() and (root / "python" / "python.exe").exists() and (root / "sync").is_dir()
 
 
+def _env_int(name: str) -> int:
+    """Return an integer environment variable, or 0 when it is absent/invalid."""
+    try:
+        return int(os.environ.get(name, "0") or "0")
+    except ValueError:
+        return 0
+
+
+def _launcher_path_from_env() -> Path | None:
+    """Return the current portable launcher path when the tray provided it."""
+    value = os.environ.get("POWERBI_DTL_LAUNCHER", "").strip()
+    return Path(value) if value else None
+
+
 def _extract_update(zip_path: Path, base_dir: Path, version: str) -> Path:
     """Extract a release zip into a staging folder."""
     stage_parent = base_dir / "downloads" / "updates" / "_staged"
@@ -362,7 +367,15 @@ def _find_portable_root(stage_dir: Path) -> Path:
     raise UpdateError("The update zip does not contain a portable app root.")
 
 
-def _write_apply_script(target_root: Path, source_root: Path, current_pid: int, version: str) -> Path:
+def _write_apply_script(
+    target_root: Path,
+    source_root: Path,
+    current_pid: int,
+    version: str,
+    *,
+    tray_pid: int = 0,
+    launcher_path: Path | None = None,
+) -> Path:
     """Write a PowerShell script that applies the staged update after shutdown."""
     script_dir = target_root / "sync" / "downloads" / "updates"
     script_dir.mkdir(parents=True, exist_ok=True)
@@ -370,7 +383,32 @@ def _write_apply_script(target_root: Path, source_root: Path, current_pid: int, 
     log_path = script_dir / f"apply-update-{_safe_filename(version)}.log"
     source = str(source_root)
     target = str(target_root)
-    script = f"""$ErrorActionPreference = "Stop"
+    launcher = str(launcher_path) if launcher_path else str(target_root / "run-portable.bat")
+    script_path.write_text(
+        _apply_script_text(
+            source=source,
+            target=target,
+            log_path=str(log_path),
+            current_pid=current_pid,
+            tray_pid=tray_pid,
+            launcher=launcher,
+        ),
+        encoding="utf-8",
+    )
+    return script_path
+
+
+def _apply_script_text(
+    *,
+    source: str,
+    target: str,
+    log_path: str,
+    current_pid: int,
+    tray_pid: int,
+    launcher: str,
+) -> str:
+    """Return the PowerShell script that swaps portable files and relaunches the app."""
+    return f"""$ErrorActionPreference = "Stop"
 $SourceRoot = @'
 {source}
 '@
@@ -381,11 +419,54 @@ $LogPath = @'
 {log_path}
 '@
 $PidToWait = {current_pid}
+$TrayPid = {tray_pid}
+$LauncherPath = @'
+{launcher}
+'@
 Start-Transcript -Path $LogPath -Append | Out-Null
 try {{
-  if ($PidToWait -gt 0) {{
-    Wait-Process -Id $PidToWait -Timeout 90 -ErrorAction SilentlyContinue
+  function Stop-ProcessById {{
+    param(
+      [int]$ProcessId,
+      [string]$Label,
+      [int]$TimeoutSeconds = 10
+    )
+    if ($ProcessId -le 0 -or $ProcessId -eq $PID) {{
+      return
+    }}
+    $Process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if (-not $Process) {{
+      return
+    }}
+    try {{
+      Wait-Process -Id $ProcessId -Timeout $TimeoutSeconds -ErrorAction SilentlyContinue
+    }} catch {{
+    }}
+    $Process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($Process) {{
+      Write-Output "Stopping $Label process $ProcessId"
+      Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    }}
   }}
+
+  function Stop-PortableProcesses {{
+    $PythonRoot = (Join-Path $TargetRoot "python")
+    $TargetPattern = "*" + $TargetRoot + "*"
+    $Processes = Get-CimInstance Win32_Process | Where-Object {{
+      ($_.ProcessId -ne $PID) -and (
+        ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($PythonRoot, [System.StringComparison]::OrdinalIgnoreCase)) -or
+        ($_.CommandLine -and $_.CommandLine -like "*run-portable.ps1*" -and $_.CommandLine -like $TargetPattern)
+      )
+    }}
+    foreach ($Item in $Processes) {{
+      Write-Output "Stopping portable process $($Item.ProcessId)"
+      Stop-Process -Id $Item.ProcessId -Force -ErrorAction SilentlyContinue
+    }}
+  }}
+
+  Stop-ProcessById -ProcessId $PidToWait -Label "API" -TimeoutSeconds 90
+  Stop-ProcessById -ProcessId $TrayPid -Label "tray" -TimeoutSeconds 5
+  Stop-PortableProcesses
   Start-Sleep -Seconds 2
   $ExcludedDirs = @(
     (Join-Path $SourceRoot "sync\\logs"),
@@ -400,13 +481,11 @@ try {{
   if ($Code -ge 8) {{
     throw "Robocopy failed with exit code $Code"
   }}
-  Start-Process (Join-Path $TargetRoot "run-portable.bat") -WindowStyle Hidden
+  Start-Process $LauncherPath -WindowStyle Hidden
 }} finally {{
   Stop-Transcript | Out-Null
 }}
 """
-    script_path.write_text(script, encoding="utf-8")
-    return script_path
 
 
 def _launch_apply_script(script_path: Path) -> None:

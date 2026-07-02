@@ -2,12 +2,16 @@ param(
   [string]$PythonVersion = "3.12.8",
   [string]$OutputDir = "build\PowerBIDataDTL-portable",
   [string]$ZipPath = "",
-  [switch]$SkipDownload
+  [switch]$SkipDownload,
+  [switch]$KeepPip,
+  [switch]$IncludeServiceSupport
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
+$PackageJson = Get-Content (Join-Path $Root "package.json") -Raw | ConvertFrom-Json
+$AppVersion = [string]$PackageJson.version
 
 function Write-Step($Text) {
   Write-Host ""
@@ -86,7 +90,33 @@ if ($PthFile) {
 Write-Step "Cài Python packages vào portable"
 $PortablePythonExe = Join-Path $PortablePython "python.exe"
 & $PortablePythonExe $GetPip --no-warn-script-location
-& $PortablePythonExe -m pip install --no-warn-script-location -r "sync\requirements.txt"
+$RequirementsPath = Join-Path $Root "sync\requirements.txt"
+if (-not $IncludeServiceSupport) {
+  $PortableRequirementsPath = Join-Path $CacheDir "requirements-portable.txt"
+  Get-Content $RequirementsPath |
+    Where-Object { $_ -notmatch "^\s*pywin32\b" } |
+    Set-Content -Path $PortableRequirementsPath -Encoding ASCII
+  $RequirementsPath = $PortableRequirementsPath
+}
+& $PortablePythonExe -m pip install --no-warn-script-location --no-compile -r $RequirementsPath
+
+Write-Step "Dọn Python package không cần cho runtime"
+$SitePackages = Join-Path $PortablePython "Lib\site-packages"
+if (Test-Path $SitePackages) {
+  Get-ChildItem $SitePackages -Recurse -Force -Directory -Include "__pycache__", "tests", "test" |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  Get-ChildItem $PortablePython -Recurse -Force -File -Include "*.pyc", "*.pyo", "*.pyi", "py.typed" |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+  if (-not $KeepPip) {
+    Get-ChildItem $SitePackages -Force -Directory |
+      Where-Object { $_.Name -eq "pip" -or $_.Name -like "pip-*.dist-info" } |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    $ScriptsDir = Join-Path $PortablePython "Scripts"
+    if (Test-Path $ScriptsDir) {
+      Remove-Item -Recurse -Force $ScriptsDir -ErrorAction SilentlyContinue
+    }
+  }
+}
 
 Write-Step "Copy ứng dụng"
 robocopy "dist" (Join-Path $OutputPath "dist") /E | Out-Null
@@ -100,6 +130,8 @@ $SyncOutput = Join-Path $OutputPath "sync"
 New-Item -ItemType Directory -Force (Join-Path $SyncOutput "logs") | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $SyncOutput "downloads") | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $SyncOutput "uploads") | Out-Null
+Set-Content -Path (Join-Path $OutputPath "VERSION") -Value $AppVersion -Encoding ASCII
+Set-Content -Path (Join-Path $SyncOutput "VERSION") -Value $AppVersion -Encoding ASCII
 Set-Content -Path (Join-Path $SyncOutput "logs\.gitkeep") -Value "" -Encoding ASCII
 Set-Content -Path (Join-Path $SyncOutput "downloads\.gitkeep") -Value "" -Encoding ASCII
 Set-Content -Path (Join-Path $SyncOutput "uploads\.gitkeep") -Value "" -Encoding ASCII
@@ -115,6 +147,9 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
+$env:POWERBI_DTL_PORTABLE_ROOT = $Root
+$env:POWERBI_DTL_TRAY_PID = [string]$PID
+$env:POWERBI_DTL_LAUNCHER = Join-Path $Root "run-portable.bat"
 $ConfigPath = Join-Path $Root "sync\config.yaml"
 if (-not (Test-Path $ConfigPath)) {
   Copy-Item (Join-Path $Root "sync\config.example.yaml") $ConfigPath
@@ -224,12 +259,50 @@ try {
 $Tray.Text = "PowerBI Data DTL"
 $Tray.Visible = $true
 
+function Get-StartupShortcutPath {
+  $StartupDir = [Environment]::GetFolderPath("Startup")
+  return Join-Path $StartupDir "PowerBI Data DTL.lnk"
+}
+
+function Test-AutoStartEnabled {
+  $ShortcutPath = Get-StartupShortcutPath
+  if (-not (Test-Path $ShortcutPath)) {
+    return $false
+  }
+  try {
+    $Shell = New-Object -ComObject WScript.Shell
+    $Shortcut = $Shell.CreateShortcut($ShortcutPath)
+    return $Shortcut.TargetPath -eq (Join-Path $Root "run-portable.bat")
+  } catch {
+    return $false
+  }
+}
+
+function Enable-AutoStart {
+  $ShortcutPath = Get-StartupShortcutPath
+  $Shell = New-Object -ComObject WScript.Shell
+  $Shortcut = $Shell.CreateShortcut($ShortcutPath)
+  $Shortcut.TargetPath = Join-Path $Root "run-portable.bat"
+  $Shortcut.WorkingDirectory = $Root
+  $Shortcut.Description = "Start PowerBI Data DTL when Windows starts"
+  $Shortcut.Save()
+}
+
+function Disable-AutoStart {
+  $ShortcutPath = Get-StartupShortcutPath
+  if (Test-Path $ShortcutPath) {
+    Remove-Item $ShortcutPath -Force
+  }
+}
+
 $Menu = New-Object System.Windows.Forms.ContextMenuStrip
 $OpenItem = $Menu.Items.Add("Open dashboard")
 $RunAllItem = $Menu.Items.Add("Run all")
 $PauseSchedulerItem = $Menu.Items.Add("Pause scheduler")
 $ResumeSchedulerItem = $Menu.Items.Add("Resume scheduler")
 $RestartApiItem = $Menu.Items.Add("Restart API")
+$EnableAutoStartItem = $Menu.Items.Add("Enable auto start")
+$DisableAutoStartItem = $Menu.Items.Add("Disable auto start")
 $Menu.Items.Add("-") | Out-Null
 $FolderItem = $Menu.Items.Add("Open app folder")
 $LogsItem = $Menu.Items.Add("Open logs")
@@ -275,6 +348,28 @@ $RestartApiItem.add_Click({
     $Tray.ShowBalloonTip(3500, "PowerBI Data DTL", "Could not restart API.", [System.Windows.Forms.ToolTipIcon]::Error)
   }
 })
+$EnableAutoStartItem.add_Click({
+  try {
+    Enable-AutoStart
+    $EnableAutoStartItem.Enabled = -not (Test-AutoStartEnabled)
+    $DisableAutoStartItem.Enabled = Test-AutoStartEnabled
+    $Tray.ShowBalloonTip(2500, "PowerBI Data DTL", "Auto start enabled.", [System.Windows.Forms.ToolTipIcon]::Info)
+  } catch {
+    $Tray.ShowBalloonTip(3500, "PowerBI Data DTL", "Could not enable auto start.", [System.Windows.Forms.ToolTipIcon]::Error)
+  }
+})
+$DisableAutoStartItem.add_Click({
+  try {
+    Disable-AutoStart
+    $EnableAutoStartItem.Enabled = -not (Test-AutoStartEnabled)
+    $DisableAutoStartItem.Enabled = Test-AutoStartEnabled
+    $Tray.ShowBalloonTip(2500, "PowerBI Data DTL", "Auto start disabled.", [System.Windows.Forms.ToolTipIcon]::Info)
+  } catch {
+    $Tray.ShowBalloonTip(3500, "PowerBI Data DTL", "Could not disable auto start.", [System.Windows.Forms.ToolTipIcon]::Error)
+  }
+})
+$EnableAutoStartItem.Enabled = -not (Test-AutoStartEnabled)
+$DisableAutoStartItem.Enabled = Test-AutoStartEnabled
 $FolderItem.add_Click({ Start-Process $Root })
 $LogsItem.add_Click({ Start-Process $LogsDir })
 $ExitItem.add_Click({
@@ -315,13 +410,29 @@ Giao dien:
 
 Sau khi chay, ung dung nam trong system tray. Bam dup icon tray de mo dashboard,
 hoac chuot phai icon tray de Run all, Pause/Resume scheduler, Restart API,
-mo thu muc log va dung runtime.
+bat/tat auto start, mo thu muc log va dung runtime.
+
+Tu khoi dong cung Windows:
+  Chuot phai icon tray -> Enable auto start.
+  Tuy chon nay tao shortcut trong thu muc Startup cua Windows va khong can quyen admin.
+  Neu di chuyen folder portable sang duong dan khac, hay Disable roi Enable lai.
 
 Lan dau tren may moi:
 1. Giai nen file zip vao mot thu muc bat ky, vi du D:\PowerBIDataDTL.
 2. Sua sync\.env: PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD.
-3. Mo run-portable.bat, vao man hinh Cau hinh Sync va them job file Excel/CSV.
+   Neu import vao SQL Server, cai Microsoft ODBC Driver 18 for SQL Server tren may Windows va dien MSSQL_USER, MSSQL_PASSWORD khi can.
+3. Mo run-portable.bat, vao man hinh Cau hinh Sync va them SQL server/job file Excel/CSV.
 4. Bam Test ket noi, Dry run, roi chay thu job.
+
+Cap nhat portable:
+  Man hinh He thong -> Cap nhat phan mem co the tai ban moi, dong runtime cu,
+  copy file moi va mo lai dashboard. Tab browser cu co the van con do gioi han
+  cua trinh duyet; dashboard moi se duoc launcher mo lai sau khi cap nhat.
+
+Windows Service:
+  Portable mac dinh dung system tray + auto start bang shortcut Startup, khong
+  dong goi pywin32 de giam dung luong. Neu can Windows Service trong portable,
+  build lai bang .\build_portable.ps1 -IncludeServiceSupport.
 
 Lenh CLI huu ich:
   .\python\python.exe .\sync\main.py check-config

@@ -1,4 +1,4 @@
-"""CLI cho hệ thống đồng bộ Excel/CSV vào PostgreSQL."""
+"""CLI cho hệ thống đồng bộ Excel/CSV vào SQL targets."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ import logging
 import sys
 from pathlib import Path
 
-from core.config import ConfigError, load_config
+from core.config import ConfigError, connection_by_id, load_config
+from core.db import create_sql_target_client
 from core.logging_setup import setup_logging
 from core.scheduler import run_foreground
 from core.service import handle_service_command
@@ -49,9 +50,9 @@ def main(argv: list[str] | None = None) -> int:
 
         engine = SyncEngine(config)
         if args.command == "test-db":
-            engine.db.test_connection()
-            engine.db.ensure_sync_log_table()
-            LOGGER.info("Database connection OK.")
+            connection_config = connection_by_id(config, args.connection_id)
+            create_sql_target_client(connection_config).test_connection()
+            LOGGER.info("Database connection OK: %s (%s).", connection_config.name, connection_config.engine)
             return 0
         if args.command == "run-all":
             results = engine.run_all(force=args.force)
@@ -82,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
-    parser = argparse.ArgumentParser(description="Excel/CSV to PostgreSQL sync")
+    parser = argparse.ArgumentParser(description="Excel/CSV to SQL sync")
     parser.add_argument(
         "--config",
         default=str(DEFAULT_CONFIG),
@@ -91,7 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("check-config", help="Validate config.yaml")
-    subparsers.add_parser("test-db", help="Test PostgreSQL connection")
+    test_db_parser = subparsers.add_parser("test-db", help="Test a configured SQL connection")
+    test_db_parser.add_argument("--connection-id", default="default", help="database_connections id to test")
     subparsers.add_parser("start", help="Start scheduler/API foreground runtime")
 
     run_all_parser = subparsers.add_parser("run-all", help="Run all enabled file sync jobs once")
@@ -130,9 +132,10 @@ def _log_jobs(jobs: list[dict[str, object]]) -> None:
     for job in jobs:
         latest = job.get("last_run") or {}
         LOGGER.info(
-            "Job: name=%s enabled=%s table=%s mode=%s cron=%s running=%s last_status=%s last_finished=%s",
+            "Job: name=%s enabled=%s connection=%s table=%s mode=%s cron=%s running=%s last_status=%s last_finished=%s",
             job.get("name"),
             job.get("enabled"),
+            job.get("connection_id"),
             job.get("table"),
             job.get("sync_mode"),
             job.get("cron"),
@@ -147,9 +150,10 @@ def _log_recent_logs(logs: list[dict[str, object]]) -> None:
     LOGGER.info("Recent sync logs: %s", len(logs))
     for row in logs:
         LOGGER.info(
-            "Log: id=%s job=%s table=%s status=%s rows=%s started=%s error=%s",
+            "Log: id=%s job=%s connection=%s table=%s status=%s rows=%s started=%s error=%s",
             row.get("id"),
             row.get("job_name"),
+            row.get("connection_id"),
             row.get("table_name"),
             row.get("status"),
             row.get("rows_imported"),

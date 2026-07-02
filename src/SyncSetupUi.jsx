@@ -155,7 +155,7 @@ export function DryRunDiffPanel({ result }) {
           {result.columns.slice(0, 12).map((column) => (
             <div className="typePreviewItem" key={column.name}>
               <span>{column.name}</span>
-              <b>{column.postgres_type}</b>
+              <b>{column.target_type || column.postgres_type}</b>
               <small>{column.nullable ? "nullable" : "not null"} · {column.pandas_type}</small>
             </div>
           ))}

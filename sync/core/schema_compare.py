@@ -1,4 +1,4 @@
-"""So sánh schema DataFrame với bảng PostgreSQL và chuẩn hóa tên cột."""
+"""So sánh schema DataFrame với bảng SQL target và chuẩn hóa tên cột."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class SchemaCompareResult:
 
 
 def compare_columns(dataframe_columns: list[str], db_columns: list[ColumnInfo] | None) -> SchemaCompareResult:
-    """Compare normalized DataFrame columns with PostgreSQL columns."""
+    """Compare normalized DataFrame columns with target table columns."""
     if db_columns is None:
         return SchemaCompareResult(table_exists=False, match=False)
 
@@ -49,6 +49,48 @@ def compare_columns(dataframe_columns: list[str], db_columns: list[ColumnInfo] |
         match=not missing_in_db and not extra_in_db,
         missing_in_db=missing_in_db,
         extra_in_db=extra_in_db,
+    )
+
+
+def compare_dataframe_to_columns(
+    df: "pd.DataFrame",
+    db_columns: list[ColumnInfo] | None,
+    *,
+    engine: str = "postgresql",
+) -> SchemaCompareResult:
+    """Compare DataFrame columns and broad types against target column metadata."""
+    if db_columns is None:
+        return SchemaCompareResult(table_exists=False, match=False)
+    if not db_columns:
+        return SchemaCompareResult(table_exists=False, match=False)
+
+    normalized_columns = [
+        normalize_identifier(column, f"column_{index + 1}")
+        for index, column in enumerate(df.columns)
+    ]
+    result = compare_columns(normalized_columns, db_columns)
+    db_types = {column.name: column.data_type for column in db_columns}
+    type_mismatches: list[dict[str, str]] = []
+    for source_column, normalized_column in zip(df.columns, normalized_columns, strict=True):
+        db_type = db_types.get(normalized_column)
+        if db_type is None:
+            continue
+        source_type = _target_type_name_for_series(df[source_column], engine)
+        if not _types_compatible(source_type, db_type, engine):
+            type_mismatches.append(
+                {
+                    "col": normalized_column,
+                    "excel_type": source_type,
+                    "db_type": db_type,
+                }
+            )
+
+    return SchemaCompareResult(
+        table_exists=True,
+        match=result.match and not type_mismatches,
+        missing_in_db=result.missing_in_db,
+        extra_in_db=result.extra_in_db,
+        type_mismatches=type_mismatches,
     )
 
 
@@ -78,38 +120,11 @@ def compare_schema(
     if not db_columns:
         return SchemaCompareResult(table_exists=False, match=False)
 
-    normalized_columns = [
-        normalize_identifier(column, f"column_{index + 1}")
-        for index, column in enumerate(df.columns)
-    ]
-    result = compare_columns(normalized_columns, db_columns)
-    db_types = {column.name: column.data_type for column in db_columns}
-    type_mismatches: list[dict[str, str]] = []
-    for source_column, normalized_column in zip(df.columns, normalized_columns, strict=True):
-        db_type = db_types.get(normalized_column)
-        if db_type is None:
-            continue
-        source_type = _postgres_type_name_for_series(df[source_column])
-        if not _types_compatible(source_type, db_type):
-            type_mismatches.append(
-                {
-                    "col": normalized_column,
-                    "excel_type": source_type,
-                    "db_type": db_type,
-                }
-            )
-
-    return SchemaCompareResult(
-        table_exists=True,
-        match=result.match and not type_mismatches,
-        missing_in_db=result.missing_in_db,
-        extra_in_db=result.extra_in_db,
-        type_mismatches=type_mismatches,
-    )
+    return compare_dataframe_to_columns(df, db_columns)
 
 
 def normalize_identifier(value: object, fallback: str = "column") -> str:
-    """Convert a string into a PostgreSQL-friendly identifier."""
+    """Convert a string into a SQL-friendly identifier."""
     normalized = str(value).strip().lower()
     normalized = IDENTIFIER_PATTERN.sub("_", normalized)
     normalized = re.sub(r"_+", "_", normalized).strip("_")
@@ -121,7 +136,7 @@ def normalize_identifier(value: object, fallback: str = "column") -> str:
 
 
 def normalize_dataframe_columns(dataframe: "pd.DataFrame") -> "pd.DataFrame":
-    """Return a DataFrame copy with PostgreSQL-friendly unique column names."""
+    """Return a DataFrame copy with SQL-friendly unique column names."""
     normalized = dataframe.copy()
     normalized.columns = dedupe_identifiers(
         [
@@ -155,42 +170,54 @@ def _split_table_name(table_name: str, default_schema: str) -> tuple[str, str]:
     return normalize_identifier(default_schema, "schema"), normalize_identifier(table_name, "table")
 
 
-def _postgres_type_name_for_series(series: "pd.Series") -> str:
-    """Map a pandas Series dtype to a PostgreSQL type name for comparison."""
+def _target_type_name_for_series(series: "pd.Series", engine: str) -> str:
+    """Map a pandas Series dtype to the target engine type name for comparison."""
     try:
         from pandas.api import types as pd_types
     except ImportError:
         return "text"
 
     if pd_types.is_bool_dtype(series):
-        return "boolean"
+        return "bit" if engine == "sqlserver" else "boolean"
     if pd_types.is_integer_dtype(series):
         return "bigint"
     if pd_types.is_float_dtype(series):
-        return "double precision"
+        return "float" if engine == "sqlserver" else "double precision"
     if pd_types.is_datetime64_any_dtype(series):
-        return "timestamp without time zone"
-    return "text"
+        return "datetime2" if engine == "sqlserver" else "timestamp without time zone"
+    return "nvarchar" if engine == "sqlserver" else "text"
 
 
-def _types_compatible(source_type: str, db_type: str) -> bool:
-    """Return whether source and database types are close enough for COPY."""
-    source_group = _type_group(source_type)
-    db_group = _type_group(db_type)
+def _types_compatible(source_type: str, db_type: str, engine: str = "postgresql") -> bool:
+    """Return whether source and database types are close enough for import."""
+    source_group = _type_group(source_type, engine)
+    db_group = _type_group(db_type, engine)
     if source_group == "text" or db_group == "text":
         return True
     return source_group == db_group
 
 
-def _type_group(type_name: str) -> str:
-    """Collapse PostgreSQL type aliases into broad comparable groups."""
+def _type_group(type_name: str, engine: str = "postgresql") -> str:
+    """Collapse target SQL type aliases into broad comparable groups."""
     normalized = type_name.lower()
-    if normalized in {"bigint", "integer", "smallint", "serial", "bigserial"}:
+    if engine == "sqlserver":
+        if normalized in {"bigint", "int", "integer", "smallint", "tinyint"}:
+            return "integer"
+        if normalized in {"float", "real", "numeric", "decimal", "money", "smallmoney"}:
+            return "float"
+        if normalized == "bit":
+            return "boolean"
+        if normalized in {"date", "datetime", "datetime2", "smalldatetime", "time", "datetimeoffset"}:
+            return "datetime"
+        if normalized in {"varchar", "nvarchar", "text", "ntext", "char", "nchar", "xml", "uniqueidentifier"}:
+            return "text"
+        return "text"
+    if normalized in {"bigint", "integer", "int", "smallint", "serial", "bigserial"}:
         return "integer"
     if normalized in {"double precision", "real", "numeric", "decimal"}:
         return "float"
     if normalized in {"boolean", "bool"}:
         return "boolean"
-    if normalized.startswith("timestamp") or normalized in {"date", "time without time zone"}:
+    if normalized.startswith("timestamp") or normalized in {"date", "time without time zone", "time with time zone"}:
         return "datetime"
     return "text"

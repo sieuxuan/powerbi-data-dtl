@@ -18,18 +18,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .config import AppConfig, ConfigError, SourceConfig, load_config
-from .db import PostgresClient, infer_dataframe_schema, validate_upsert_dataframe
+from .config import AppConfig, ConfigError, SourceConfig, connection_by_id, load_config
+from .db import create_sql_target_client, infer_dataframe_schema, validate_upsert_dataframe
 from .file_reader import calculate_md5, read_tabular_file
 from .notifier import Notifier
-from .onedrive import _filename_from_url, _source_kind, download_onedrive_file
-from .schema_compare import compare_columns, normalize_dataframe_columns, normalize_identifier
+from .onedrive import MAX_DOWNLOAD_BYTES, _filename_from_url, _source_kind, download_onedrive_file
+from .schema_compare import compare_dataframe_to_columns, normalize_dataframe_columns, normalize_identifier
 from .sync_engine import SyncEngine
 from .updater import UpdateError, apply_update, check_for_update, download_update
 
 
 LOGGER = logging.getLogger(__name__)
 SAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+MAX_INLINE_FILE_BYTES = 25 * 1024 * 1024
 
 
 def _unique_imported_job_name(name: str, existing_names: set[str]) -> str:
@@ -81,6 +82,28 @@ def _merge_bundle_jobs(
 
     merged_payload["files"] = merged_jobs
     return merged_payload, added_names
+
+
+def _base64_decoded_size(value: str) -> int:
+    """Return the decoded byte size implied by a base64 string."""
+    compact = "".join(str(value or "").split())
+    padding = len(compact) - len(compact.rstrip("="))
+    return max(0, (len(compact) * 3 // 4) - padding)
+
+
+def _decode_base64_payload(value: str, *, max_bytes: int, label: str) -> bytes:
+    """Decode base64 after enforcing an approximate decoded-size limit."""
+    content_base64 = str(value or "")
+    if "," in content_base64 and content_base64.lstrip().startswith("data:"):
+        content_base64 = content_base64.split(",", 1)[1]
+    if not content_base64:
+        raise ValueError(f"{label} is required")
+    if _base64_decoded_size(content_base64) > max_bytes:
+        raise ValueError(f"{label} is too large. Limit is {max_bytes // (1024 * 1024)} MB.")
+    try:
+        return base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"Invalid {label}") from exc
 
 
 class ApiJobRunner:
@@ -206,6 +229,18 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
         finally:
             if temp_name:
                 Path(temp_name).unlink(missing_ok=True)
+
+    def load_payload_config_without_files(payload: dict[str, Any] | None) -> AppConfig:
+        """Load request config after removing jobs that are irrelevant for config-level actions."""
+        config_payload = dict(config_payload_from_request(payload))
+        config_payload["files"] = []
+        return load_payload_config(config_payload)
+
+    def connection_from_payload(payload: dict[str, Any] | None) -> tuple[AppConfig, Any]:
+        """Resolve the requested SQL connection from an API payload."""
+        runtime_config = load_payload_config_without_files(payload)
+        connection_id = str((payload or {}).get("connection_id") or "default")
+        return runtime_config, connection_by_id(runtime_config, connection_id)
 
     def config_payload_from_request(payload: dict[str, Any] | None) -> dict[str, Any]:
         if payload and isinstance(payload.get("config"), dict):
@@ -438,6 +473,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
                         "name": bundle_runtime.database.name,
                         "schema": bundle_runtime.database.schema,
                     }
+                    summary["database_connections_count"] = len(bundle_runtime.database_connections)
                 except ConfigError as exc:
                     summary["config_error"] = str(exc)
             return summary
@@ -445,24 +481,26 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
     def dry_run_file_payload(payload: dict[str, Any]) -> dict[str, Any]:
         """Read and validate a file job without importing rows."""
         runtime_config, file_config, source, _file_hash = prepare_preview_file_from_payload(payload)
-        schema = normalize_identifier(file_config.target.schema or runtime_config.database.schema, "schema")
+        connection_config = connection_by_id(runtime_config, file_config.target.connection_id or "default")
+        schema = normalize_identifier(file_config.target.schema or connection_config.schema, "schema")
         table = normalize_identifier(file_config.target.table, "table")
         primary_key = [normalize_identifier(column, "column") for column in file_config.target.primary_key]
         try:
             sample_limit = int(payload.get("sample_rows") or 1000)
             read_result = read_tabular_file(source.path, file_config.options, nrows=max(20, min(sample_limit, 5000)))
             dataframe = normalize_dataframe_columns(read_result.dataframe)
-            db_client = PostgresClient(runtime_config.database)
+            db_client = create_sql_target_client(connection_config)
             db_client.test_write_permission(schema)
             table_exists = db_client.table_exists(schema, table)
             db_columns = db_client.get_columns(schema, table) if table_exists else None
-            compare_result = compare_columns(list(dataframe.columns), db_columns)
-            source_schema = infer_dataframe_schema(dataframe)
+            compare_result = compare_dataframe_to_columns(dataframe, db_columns, engine=connection_config.engine)
+            source_schema = infer_dataframe_schema(dataframe, connection_config.engine)
             if file_config.sync_mode == "upsert":
                 validate_upsert_dataframe(dataframe, primary_key)
             diff = _dry_run_diff(
                 source_schema,
                 db_columns,
+                engine=connection_config.engine,
                 rows_to_import=read_result.row_count,
                 sync_mode=file_config.sync_mode,
                 mismatch_policy=file_config.on_column_mismatch,
@@ -471,6 +509,9 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
                 "status": "ok",
                 "job": file_config.name,
                 "target": f"{schema}.{table}",
+                "connection_id": connection_config.id,
+                "connection_name": connection_config.name,
+                "engine": connection_config.engine,
                 "source_path": str(read_result.file_path),
                 "hash": read_result.file_hash,
                 "rows": read_result.row_count,
@@ -592,7 +633,7 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
             preview_result_cache[cache_key] = dict(result)
         return result
 
-    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.5")
+    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.6")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.api.cors_origins,
@@ -648,32 +689,34 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
 
     @app.post("/api/config/test-db")
     def test_database(payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        config_payload = dict(config_payload_from_request(payload))
-        config_payload["files"] = []
-        runtime_config = load_payload_config(config_payload)
+        _runtime_config, connection_config = connection_from_payload(payload)
         try:
-            PostgresClient(runtime_config.database).test_connection()
+            create_sql_target_client(connection_config).test_connection()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "status": "ok",
             "message": (
-                f"Connected to PostgreSQL {runtime_config.database.host}:"
-                f"{runtime_config.database.port}/{runtime_config.database.name}."
+                f"Connected to {connection_config.engine} {connection_config.host}:"
+                f"{connection_config.port}/{connection_config.database}."
             ),
         }
 
     @app.post("/api/config/test-write")
     def test_write_permission(payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        config_payload = dict(config_payload_from_request(payload))
-        config_payload["files"] = []
-        runtime_config = load_payload_config(config_payload)
-        schema = str((payload or {}).get("schema") or runtime_config.database.schema)
+        _runtime_config, connection_config = connection_from_payload(payload)
+        schema = str((payload or {}).get("schema") or connection_config.schema)
         try:
-            PostgresClient(runtime_config.database).test_write_permission(schema)
+            create_sql_target_client(connection_config).test_write_permission(schema)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"status": "ok", "message": f"User can create, insert, and drop a test table in schema {schema}."}
+        return {
+            "status": "ok",
+            "message": (
+                f"User can create, insert, and drop a test table in schema {schema} "
+                f"on {connection_config.name}."
+            ),
+        }
 
     @app.post("/api/config/test-webhook")
     def test_webhook(payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -747,15 +790,16 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
     @app.post("/api/files/upload")
     def upload_file(payload: dict[str, Any]) -> dict[str, Any]:
         filename = str(payload.get("filename") or "").strip()
-        content_base64 = str(payload.get("content_base64") or "")
-        if "," in content_base64 and content_base64.lstrip().startswith("data:"):
-            content_base64 = content_base64.split(",", 1)[1]
-        if not filename or not content_base64:
+        if not filename or not payload.get("content_base64"):
             raise HTTPException(status_code=400, detail="filename and content_base64 are required")
         try:
-            content = base64.b64decode(content_base64, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Invalid base64 file content") from exc
+            content = _decode_base64_payload(
+                str(payload.get("content_base64") or ""),
+                max_bytes=MAX_DOWNLOAD_BYTES,
+                label="base64 file content",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=413 if "too large" in str(exc) else 400, detail=str(exc)) from exc
         target_path = unique_upload_path(filename)
         target_path.write_bytes(content)
         relative_path = f"./uploads/{target_path.name}"
@@ -776,16 +820,27 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
         source = SourceConfig(type="onedrive", share_url=url)
         try:
             result = download_onedrive_file(source, runtime_config.downloads, runtime_config.base_dir, "linked_import")
+            size = result.path.stat().st_size
+            if size > MAX_INLINE_FILE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "Downloaded file is too large to return to the browser preview. "
+                        "Add it as a SharePoint/OneDrive sync job or use a local file path instead."
+                    ),
+                )
             content = result.path.read_bytes()
             filename = result.path.name or _filename_from_url(url) or "linked_import.xlsx"
             return {
                 "status": "ok",
                 "filename": filename,
                 "path": str(result.path),
-                "size": len(content),
+                "size": size,
                 "source_kind": _source_kind(url),
                 "content_base64": base64.b64encode(content).decode("ascii"),
             }
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
@@ -803,29 +858,27 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
 
     @app.post("/api/config/import-bundle")
     def import_bundle(payload: dict[str, Any]) -> dict[str, Any]:
-        content_base64 = str(payload.get("content_base64") or "")
         mode = str(payload.get("mode") or "replace").strip() or "replace"
-        if "," in content_base64 and content_base64.lstrip().startswith("data:"):
-            content_base64 = content_base64.split(",", 1)[1]
-        if not content_base64:
-            raise HTTPException(status_code=400, detail="content_base64 is required")
         try:
-            content = base64.b64decode(content_base64, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Invalid base64 bundle content") from exc
+            content = _decode_base64_payload(
+                str(payload.get("content_base64") or ""),
+                max_bytes=MAX_DOWNLOAD_BYTES,
+                label="base64 bundle content",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=413 if "too large" in str(exc) else 400, detail=str(exc)) from exc
         return restore_export_bundle(content, mode=mode)
 
     @app.post("/api/config/preview-bundle")
     def preview_bundle(payload: dict[str, Any]) -> dict[str, Any]:
-        content_base64 = str(payload.get("content_base64") or "")
-        if "," in content_base64 and content_base64.lstrip().startswith("data:"):
-            content_base64 = content_base64.split(",", 1)[1]
-        if not content_base64:
-            raise HTTPException(status_code=400, detail="content_base64 is required")
         try:
-            content = base64.b64decode(content_base64, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Invalid base64 bundle content") from exc
+            content = _decode_base64_payload(
+                str(payload.get("content_base64") or ""),
+                max_bytes=MAX_DOWNLOAD_BYTES,
+                label="base64 bundle content",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=413 if "too large" in str(exc) else 400, detail=str(exc)) from exc
         return preview_export_bundle(content)
 
     @app.post("/api/open-folder")
@@ -945,6 +998,7 @@ def _dry_run_diff(
     source_schema: list[dict[str, Any]],
     db_columns: list[Any] | None,
     *,
+    engine: str,
     rows_to_import: int,
     sync_mode: str,
     mismatch_policy: str,
@@ -953,7 +1007,10 @@ def _dry_run_diff(
     source_names = [str(column["name"]) for column in source_schema]
     db_names = [column.name for column in db_columns or []]
     db_type_by_name = {column.name: column.data_type for column in db_columns or []}
-    source_type_by_name = {str(column["name"]): str(column["postgres_type"]) for column in source_schema}
+    source_type_by_name = {
+        str(column["name"]): str(column.get("target_type") or column.get("postgres_type") or "TEXT")
+        for column in source_schema
+    }
     source_set = set(source_names)
     db_set = set(db_names)
     columns_new = sorted(source_set - db_set)
@@ -962,7 +1019,7 @@ def _dry_run_diff(
     for name in sorted(source_set & db_set):
         source_type = source_type_by_name.get(name, "TEXT")
         db_type = db_type_by_name.get(name, "text")
-        if not _pg_types_compatible(source_type, db_type):
+        if not _target_types_compatible(source_type, db_type, engine):
             type_mismatches.append(
                 {
                     "column": name,
@@ -1001,19 +1058,29 @@ def _dry_run_diff(
     }
 
 
-def _pg_types_compatible(source_type: str, db_type: str) -> bool:
+def _target_types_compatible(source_type: str, db_type: str, engine: str) -> bool:
     """Return whether source and DB column types are broadly compatible."""
-    source_group = _pg_type_group(source_type)
-    db_group = _pg_type_group(db_type)
+    source_group = _target_type_group(source_type, engine)
+    db_group = _target_type_group(db_type, engine)
     if source_group == "text" or db_group == "text":
         return True
     return source_group == db_group
 
 
-def _pg_type_group(type_name: str) -> str:
-    """Collapse PostgreSQL type aliases into coarse groups for dry-run diff."""
+def _target_type_group(type_name: str, engine: str) -> str:
+    """Collapse target type aliases into coarse groups for dry-run diff."""
     normalized = str(type_name).lower()
-    if normalized in {"bigint", "integer", "smallint", "serial", "bigserial"}:
+    if engine == "sqlserver":
+        if normalized in {"bigint", "int", "integer", "smallint", "tinyint"}:
+            return "integer"
+        if normalized in {"float", "real", "numeric", "decimal", "money", "smallmoney"}:
+            return "float"
+        if normalized == "bit":
+            return "boolean"
+        if normalized in {"date", "datetime", "datetime2", "smalldatetime", "time", "datetimeoffset"}:
+            return "datetime"
+        return "text"
+    if normalized in {"bigint", "integer", "int", "smallint", "serial", "bigserial"}:
         return "integer"
     if normalized in {"double precision", "real", "numeric", "decimal"}:
         return "float"

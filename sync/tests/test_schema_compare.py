@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 import unittest
 
-from core.schema_compare import ColumnInfo, compare_columns, compare_schema, normalize_identifier
+from core.schema_compare import ColumnInfo, compare_columns, compare_dataframe_to_columns, compare_schema, normalize_identifier
 
 
 class FakeCursor:
@@ -61,6 +61,46 @@ class SchemaCompareTests(unittest.TestCase):
 
         self.assertTrue(result.match)
         self.assertEqual(connection.cursor_instance.params, ("public", "sample"))
+        self.assertEqual(result.type_mismatches, [])
+
+    @unittest.skipIf(importlib.util.find_spec("pandas") is None, "pandas is not installed")
+    def test_compare_dataframe_to_columns_flags_type_mismatch(self) -> None:
+        import pandas as pd
+
+        dataframe = pd.DataFrame({"id": [1], "active": [True]})
+        result = compare_dataframe_to_columns(
+            dataframe,
+            [
+                ColumnInfo(name="id", data_type="bigint", is_nullable=False),
+                ColumnInfo(name="active", data_type="timestamp without time zone", is_nullable=True),
+            ],
+        )
+
+        self.assertTrue(result.has_mismatch)
+        self.assertEqual(result.type_mismatches[0]["col"], "active")
+
+    @unittest.skipIf(importlib.util.find_spec("pandas") is None, "pandas is not installed")
+    def test_compare_dataframe_to_sqlserver_columns_uses_sqlserver_types(self) -> None:
+        import pandas as pd
+
+        dataframe = pd.DataFrame(
+            {
+                "id": [1],
+                "active": [True],
+                "created_at": pd.to_datetime(["2026-01-01"]),
+            }
+        )
+        result = compare_dataframe_to_columns(
+            dataframe,
+            [
+                ColumnInfo(name="id", data_type="bigint", is_nullable=False),
+                ColumnInfo(name="active", data_type="bit", is_nullable=True),
+                ColumnInfo(name="created_at", data_type="datetime2", is_nullable=True),
+            ],
+            engine="sqlserver",
+        )
+
+        self.assertTrue(result.match)
         self.assertEqual(result.type_mismatches, [])
 
 

@@ -66,7 +66,7 @@ class SyncWindowsService(_service_framework_base()):
 
     _svc_name_ = SERVICE_NAME
     _svc_display_name_ = DISPLAY_NAME
-    _svc_description_ = "Scheduled Excel/CSV to PostgreSQL sync service."
+    _svc_description_ = "Scheduled Excel/CSV to SQL sync service."
 
     def __init__(self, args: list[str]) -> None:
         super().__init__(args)

@@ -6,10 +6,12 @@ import logging
 import ipaddress
 import re
 import socket
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
+from typing import Any, Iterator
+from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse, urlunparse
 
 from .config import DownloadsConfig, SourceConfig
 from .schema_compare import normalize_identifier
@@ -18,6 +20,7 @@ from .schema_compare import normalize_identifier
 LOGGER = logging.getLogger(__name__)
 FILENAME_PATTERN = re.compile(r"filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?", re.IGNORECASE)
 MAX_DOWNLOAD_BYTES = 250 * 1024 * 1024
+MAX_REDIRECTS = 10
 
 
 class OneDriveError(RuntimeError):
@@ -53,7 +56,7 @@ def download_onedrive_file(
         download_dir = base_dir / download_dir
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    with httpx.stream("GET", download_url, follow_redirects=True, timeout=120) as response:
+    with _validated_download_stream(httpx, download_url) as response:
         response.raise_for_status()
         length = response.headers.get("content-length")
         if length:
@@ -84,6 +87,24 @@ def download_onedrive_file(
 
     LOGGER.info("Downloaded OneDrive file to %s", target_path)
     return DownloadResult(path=target_path, temporary=not downloads.keep_files)
+
+
+@contextmanager
+def _validated_download_stream(httpx: Any, url: str) -> Iterator[Any]:
+    """Open a streaming response while validating every redirect target."""
+    current_url = url
+    for _redirect_count in range(MAX_REDIRECTS + 1):
+        _validate_download_url(current_url)
+        with httpx.stream("GET", current_url, follow_redirects=False, timeout=120) as response:
+            if response.is_redirect:
+                location = response.headers.get("location")
+                if not location:
+                    raise OneDriveError("Download redirect is missing a Location header.")
+                current_url = urljoin(current_url, location)
+                continue
+            yield response
+            return
+    raise OneDriveError("Download link redirected too many times.")
 
 
 def _to_download_url(url: str) -> str:

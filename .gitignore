@@ -12,6 +12,7 @@ yarn-error.log*
 sync/config.yaml
 sync/config.yaml.bak
 sync/logs/*.log
+sync/logs/*.sqlite
 sync/downloads/*
 sync/uploads/*
 sync/exports/*

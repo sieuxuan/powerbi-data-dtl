@@ -1,6 +1,6 @@
-# Excel to PostgreSQL Sync
+# Excel/CSV to SQL Sync
 
-Phase 1-3 MVP cho he thong dong bo Excel/CSV/OneDrive vao PostgreSQL.
+He thong dong bo Excel/CSV/OneDrive vao nhieu SQL target. V1 ho tro PostgreSQL va Microsoft SQL Server.
 
 ## Cai dat
 
@@ -13,7 +13,7 @@ pip install -r requirements.txt
 
 ## Cau hinh
 
-Sua `config.yaml`, dat thong tin PostgreSQL va danh sach file can sync.
+Sua `config.yaml`, dat `database_connections` va danh sach file can sync. Block `database` cu van duoc ho tro va se thanh connection `default` neu chua co `database_connections`.
 Co the dung bien moi truong trong dang `${PG_PASSWORD}`.
 Neu muon tach thong tin server ra ngoai YAML, copy `.env.example` thanh `.env` va dien:
 
@@ -23,7 +23,11 @@ PG_PORT=5432
 PG_DATABASE=powerbi_data
 PG_USER=postgres
 PG_PASSWORD=your_password
+MSSQL_USER=sa
+MSSQL_PASSWORD=your_password
 ```
+
+Neu import vao SQL Server, may Windows can cai Microsoft ODBC Driver 18 for SQL Server. Python package `pyodbc` chi la driver client, khong tu cai ODBC driver cua Microsoft.
 
 Trong `files[].options.header_row`, dung so 0-indexed: `0` la dong dau tien, `4` la dong thu 5 lam header.
 Dung `files[].options.column_renames` de doi ten cot sau khi doc header, vi du:
@@ -58,9 +62,9 @@ python main.py service remove
 
 ## Quy trinh su dung nhanh
 
-1. Sua `config.yaml`: dien `database`, dat `files[].enabled=true`, kiem tra `source.path` hoac OneDrive `share_url`.
+1. Sua `config.yaml`: dien `database_connections`, dat `files[].target.connection_id`, `files[].enabled=true`, kiem tra `source.path` hoac OneDrive `share_url`.
 2. Chay `python main.py check-config` de bat loi cau hinh.
-3. Chay `python main.py test-db` de kiem tra PostgreSQL va tao `sync_log`.
+3. Chay `python main.py test-db` de kiem tra connection `default`.
 4. Chay thu `python main.py run-all --force`.
 5. Chay nen bang `python main.py start` hoac cai Windows Service bang `python main.py service install`.
 
@@ -96,11 +100,13 @@ Frontend Vite doc API URL tu `VITE_SYNC_API_URL`, fallback `http://127.0.0.1:876
 - Scheduler APScheduler theo cron tung file hoac `schedule.default_cron`.
 - Moi job co the dung nhieu lich qua `files[].crons`; neu khong co `crons` thi fallback ve `files[].cron`, roi `schedule.default_cron`.
 - Khi chay bang `python main.py start` hoac `run-portable.bat`, runtime tu reload scheduler khi `sync/config.yaml` thay doi nen khong can restart de ap dung cron moi.
-- Ghi `sync_log` vao PostgreSQL va dung hash de skip file khong doi.
+- Moi job chon target qua `files[].target.connection_id`; neu thieu thi dung `default`.
+- Log, monitor va hash-skip dung SQLite local tai `sync/logs/sync_state.sqlite`.
+- `logging.log_to_db=true` chi ghi them target-side `sync_log` cho PostgreSQL khi can, khong phai source of truth.
 - Ho tro `truncate_insert`, `drop_recreate`, `append`, `upsert`.
 - Gui Windows toast, email summary va webhook neu bat trong config. Webhook mac dinh gui `success`, `failed` va `mismatch`.
-- Dry run doc file, infer PostgreSQL type, so schema va test quyen ghi nhung khong import du lieu.
-- API cache preview SharePoint trong `.preview_cache`, tra progress job cho dashboard va dung PostgreSQL connection pool trong tien trinh chay nen.
+- Dry run doc file, infer type theo target engine, so schema va test quyen ghi nhung khong import du lieu.
+- API cache preview SharePoint trong `.preview_cache`, tra progress job cho dashboard va dung connection client rieng theo target trong tien trinh chay nen.
 - Link online ho tro SharePoint/OneDrive, Google Sheets public/export, Google Drive file/direct download bang backend de tranh CORS.
 - `maintenance` cau hinh retention cho `sync_log`, `downloads`, `uploads`, `.preview_cache`.
 - `updates` kiem tra GitHub Releases khi scheduler khoi dong; neu `auto_download=true` thi tai san asset portable moi hon `current_version`. Viec cai ban moi duoc kich hoat tu UI de tranh tu thay file nen ngoai y muon; updater giu nguyen `sync/config.yaml`, `sync/.env`, logs/uploads/downloads.

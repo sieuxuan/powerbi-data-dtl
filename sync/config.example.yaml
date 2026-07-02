@@ -7,6 +7,31 @@ database:
   password: "${PG_PASSWORD}"
   schema: "public"
 
+# Nhieu server import. Neu bo qua block nay, app tu tao connection "default" tu database ben tren.
+database_connections:
+  - id: "default"
+    name: "PostgreSQL local"
+    engine: "postgresql"
+    host: "${PG_HOST}"
+    port: 5432
+    database: "${PG_DATABASE}"
+    user: "${PG_USER}"
+    password: "${PG_PASSWORD}"
+    schema: "public"
+
+  - id: "warehouse_sqlserver"
+    name: "SQL Server Warehouse"
+    engine: "sqlserver"
+    host: "localhost"
+    port: 1433
+    database: "PowerBIData"
+    user: "sa"
+    password: "${MSSQL_PASSWORD}"
+    schema: "dbo"
+    driver: "ODBC Driver 18 for SQL Server"
+    encrypt: true
+    trust_server_certificate: true
+
 # === LICH TRINH ===
 schedule:
   default_cron: "0 6 * * *"
@@ -22,7 +47,7 @@ downloads:
 updates:
   enabled: true
   repo: "sieuxuan/powerbi-data-dtl"
-  current_version: "1.0.5"
+  current_version: "1.0.6"
   asset_pattern: "PowerBIDataDTL-portable.zip"
   check_on_startup: true
   auto_download: true
@@ -66,6 +91,7 @@ files:
       type: "local"
       path: "C:/Users/Admin/OneDrive/BaoCao/doanh_thu.xlsx"
     target:
+      connection_id: "default"
       table: "doanh_thu"
       schema: "public"
     options:
@@ -93,8 +119,9 @@ files:
       type: "onedrive"
       share_url: "https://1drv.ms/x/s!AbcDefGhIjKl..."
     target:
+      connection_id: "warehouse_sqlserver"
       table: "nhan_vien"
-      schema: "public"
+      schema: "dbo"
       primary_key:
         - "ma_nhan_vien"
     options:
