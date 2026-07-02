@@ -69,7 +69,7 @@ def check_for_update(config: UpdateConfig, base_dir: Path | None = None) -> Upda
             configured=False,
             update_available=False,
             current_version=current_version,
-            message="Update check is disabled or GitHub repo is empty.",
+            message="Chưa bật kiểm tra cập nhật hoặc chưa cấu hình GitHub repo.",
         )
 
     release = _fetch_latest_release(config, repo)
@@ -90,7 +90,7 @@ def check_for_update(config: UpdateConfig, base_dir: Path | None = None) -> Upda
         asset_name=asset.get("name") if asset else None,
         asset_url=asset.get("browser_download_url") if asset else None,
         downloaded_path=str(downloaded_path) if downloaded_path else None,
-        message="Update available." if update_available else "Already up to date.",
+        message="Có bản mới. Hãy tải gói cập nhật trước khi cài." if update_available else "Đang dùng bản mới nhất.",
     )
 
 
@@ -121,7 +121,7 @@ def download_update(config: UpdateConfig, base_dir: Path) -> UpdateInfo:
             asset_name=info.asset_name,
             asset_url=info.asset_url,
             downloaded_path=str(target_path),
-            message=f"Update already downloaded at {target_path}.",
+            message=f"Gói cập nhật đã được tải sẵn tại {target_path}.",
         )
 
     partial_path = target_path.with_suffix(f"{target_path.suffix}.part")
@@ -147,7 +147,7 @@ def download_update(config: UpdateConfig, base_dir: Path) -> UpdateInfo:
         asset_name=info.asset_name,
         asset_url=info.asset_url,
         downloaded_path=str(target_path),
-        message=f"Downloaded update to {target_path}.",
+        message=f"Đã tải gói cập nhật vào {target_path}.",
     )
 
 
@@ -181,11 +181,11 @@ def apply_update(config: UpdateConfig, base_dir: Path, *, restart: bool = False)
         launcher_path=_launcher_path_from_env(),
         version=info.latest_version or "update",
     )
-    message = f"Update staged at {source_root}. Run {script_path} to apply."
+    message = f"Đã chuẩn bị bản cập nhật tại {source_root}. Chạy {script_path} để cài."
     if restart:
         _launch_apply_script(script_path)
         _exit_process_soon()
-        message = "Update is being applied. The app will close and reopen automatically."
+        message = "Đang cài cập nhật. Ứng dụng sẽ đóng runtime cũ và tự mở lại."
 
     return UpdateInfo(
         configured=info.configured,

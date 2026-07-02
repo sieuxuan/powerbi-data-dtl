@@ -45,7 +45,7 @@ const DEFAULT_CONFIG = {
   updates: {
     enabled: false,
     repo: "",
-    current_version: "1.0.9",
+    current_version: "1.1.0",
     asset_pattern: "PowerBIDataDTL-portable.zip",
     check_on_startup: true,
     auto_download: false,
@@ -943,19 +943,21 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
     if (!configData) return;
     const silent = Boolean(options.silent);
     const setBusy = action === "apply" ? setIsApplyingUpdate : action === "download" ? setIsDownloadingUpdate : setIsCheckingUpdate;
+    const actionLabel = action === "apply" ? "Cài cập nhật" : action === "download" ? "Tải cập nhật" : "Kiểm tra cập nhật";
     setBusy(true);
     setError("");
     try {
       const endpoint = action === "apply" ? "/api/update/apply" : action === "download" ? "/api/update/download" : "/api/update/check";
       const result = await syncApi(endpoint, {
         method: "POST",
+        timeoutMs: action === "check" ? 45000 : 300000,
         body: JSON.stringify({ config: configData }),
       });
       setUpdateInfo(result);
       if (action === "apply") {
         setMessage(result.message || "Đang áp dụng bản cập nhật. Ứng dụng sẽ tự mở lại.");
       } else if (action === "download") {
-        setMessage(result.downloaded_path ? `Bản cập nhật đã sẵn sàng tại ${result.downloaded_path}.` : "Không có bản mới để tải.");
+        setMessage(result.downloaded_path ? `Đã tải bản ${result.latest_version} vào ${result.downloaded_path}.` : "Không có bản mới để tải.");
       } else if (!silent || result.update_available) {
         setMessage(result.update_available ? `Có bản mới ${result.latest_version}.` : "Đang dùng bản mới nhất.");
       }
@@ -967,14 +969,10 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
         message: updateError.message,
         error: true,
       });
-      if (!silent) setError(`Kiểm tra cập nhật lỗi: ${updateError.message}`);
+      if (!silent) setError(`${actionLabel} lỗi: ${updateError.message}`);
     } finally {
       setBusy(false);
     }
-  }
-
-  function runUpdatePrimaryAction() {
-    checkUpdate("apply");
   }
 
   async function uploadJobFile(index, file) {
@@ -2065,7 +2063,12 @@ export default function SyncSetup({ notice = "", focusJobName = "", focusToken =
             isDownloadingUpdate={isDownloadingUpdate}
             isApplyingUpdate={isApplyingUpdate}
             onCheckUpdate={() => checkUpdate("check")}
-            onRunPrimaryAction={runUpdatePrimaryAction}
+            onDownloadUpdate={() => checkUpdate("download")}
+            onApplyUpdate={() => {
+              if (window.confirm("Cài bản cập nhật đã tải? Ứng dụng sẽ đóng runtime cũ, copy bản mới và mở lại dashboard.")) {
+                checkUpdate("apply");
+              }
+            }}
           />
 
           <BackupRestore

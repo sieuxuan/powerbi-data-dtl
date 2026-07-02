@@ -6,6 +6,7 @@ import base64
 import binascii
 import copy
 import hashlib
+import json
 import logging
 import os
 import re
@@ -633,7 +634,46 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
             preview_result_cache[cache_key] = dict(result)
         return result
 
-    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.0.9")
+    def cached_test_file_result(path: Path, file_config: Any, file_hash: str, sample_limit: int) -> dict[str, Any]:
+        """Return cached Test file metadata for repeated checks of the same file/options."""
+        cache_key = "|".join(
+            [
+                "test",
+                file_hash,
+                str(sample_limit),
+                json.dumps(file_config.options.__dict__, sort_keys=True, default=str),
+            ]
+        )
+        with preview_cache_lock:
+            cached = preview_result_cache.get(cache_key)
+            if cached:
+                return dict(cached)
+        read_result = read_tabular_file(
+            path,
+            file_config.options,
+            nrows=sample_limit,
+            file_hash=file_hash,
+            fast_sample=True,
+        )
+        result = {
+            "status": "ok",
+            "message": (
+                f"Read sample {read_result.row_count} row(s), "
+                f"{len(read_result.columns)} column(s) from {read_result.file_path}."
+            ),
+            "path": str(read_result.file_path),
+            "hash": read_result.file_hash,
+            "rows": read_result.row_count,
+            "sampled": True,
+            "sample_limit": sample_limit,
+            "columns": read_result.columns[:100],
+            "column_count": len(read_result.columns),
+        }
+        with preview_cache_lock:
+            preview_result_cache[cache_key] = dict(result)
+        return result
+
+    app = FastAPI(title="PowerBI Data DTL Sync API", version="1.1.0")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.api.cors_origins,
@@ -750,24 +790,10 @@ def create_app(config: AppConfig, runtime_status: Any | None = None, runtime_con
     def test_file(payload: dict[str, Any]) -> dict[str, Any]:
         source = None
         try:
-            _runtime_config, file_config, source = prepare_file_from_payload(payload)
+            _runtime_config, file_config, source, file_hash = prepare_preview_file_from_payload(payload)
             sample_limit = int(payload.get("sample_limit") or 100)
             sample_limit = max(100, min(sample_limit, 20_000))
-            read_result = read_tabular_file(source.path, file_config.options, nrows=sample_limit)
-            return {
-                "status": "ok",
-                "message": (
-                    f"Read sample {read_result.row_count} row(s), "
-                    f"{len(read_result.columns)} column(s) from {read_result.file_path}."
-                ),
-                "path": str(read_result.file_path),
-                "hash": read_result.file_hash,
-                "rows": read_result.row_count,
-                "sampled": True,
-                "sample_limit": sample_limit,
-                "columns": read_result.columns[:100],
-                "column_count": len(read_result.columns),
-            }
+            return cached_test_file_result(source.path, file_config, file_hash, sample_limit)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:

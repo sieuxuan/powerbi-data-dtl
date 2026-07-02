@@ -250,7 +250,7 @@ class SyncEngine:
 
             self._progress(file_config.name, "reading")
             read_result = run_with_retry(
-                lambda: read_tabular_file(source.path, file_config.options),
+                lambda: read_tabular_file(source.path, file_config.options, file_hash=file_hash),
                 self.config.retry.file,
                 label=f"read file {file_config.name}",
                 logger=LOGGER,

@@ -33,6 +33,7 @@ class SyncRuntime:
         self._start_scheduler()
         if self.config.api.enabled:
             self._start_api()
+        self._run_jobs_on_startup()
         self._check_updates_on_startup()
 
     def stop(self) -> None:
@@ -91,7 +92,7 @@ class SyncRuntime:
             return
         self.scheduler.remove_all_jobs()
         for file_config in enabled_files(self.config):
-            crons = file_config.crons or ([file_config.cron] if file_config.cron else [])
+            crons = self._job_crons(file_config)
             if not crons:
                 LOGGER.info("Job %s has no cron schedule; it can still run manually.", file_config.name)
                 continue
@@ -106,6 +107,15 @@ class SyncRuntime:
                     replace_existing=True,
                 )
                 LOGGER.info("Scheduled %s with cron '%s'.", file_config.name, cron)
+
+    def _job_crons(self, file_config: Any) -> list[str]:
+        """Return job cron expressions with app-level default fallback."""
+        if file_config.crons:
+            return list(file_config.crons)
+        if file_config.cron:
+            return [file_config.cron]
+        default_cron = str(self.config.schedule.default_cron or "").strip()
+        return [default_cron] if default_cron else []
 
     def _config_mtime(self) -> float | None:
         """Return current config mtime for lightweight reload detection."""
@@ -135,6 +145,18 @@ class SyncRuntime:
         self._reload_config_if_changed()
         config = self.config
         self.executor.submit(lambda: SyncEngine(config).run_by_name(name))
+
+    def _run_jobs_on_startup(self) -> None:
+        """Submit all enabled jobs once when schedule.on_startup is enabled."""
+        if not self.config.schedule.on_startup:
+            return
+        jobs = enabled_files(self.config)
+        if not jobs:
+            LOGGER.info("schedule.on_startup=true but there are no enabled jobs.")
+            return
+        LOGGER.info("schedule.on_startup=true; running all enabled jobs once.")
+        for file_config in jobs:
+            self._submit_job(file_config.name)
 
     def _start_api(self) -> None:
         """Start the local FastAPI server in a background thread."""

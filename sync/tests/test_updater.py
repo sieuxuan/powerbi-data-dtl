@@ -50,7 +50,7 @@ class UpdaterTests(unittest.TestCase):
                 info = download_update(config, base_dir)
 
             self.assertEqual(info.downloaded_path, str(existing))
-            self.assertIn("already downloaded", info.message)
+            self.assertIn("đã được tải sẵn", info.message)
 
 
 def _release() -> dict[str, object]:

@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Eye, RefreshCcw, Save } from "lucide-react";
+import { AlertCircle, CheckCircle2, Download, Eye, RefreshCcw, Save } from "lucide-react";
 
 export function SetupNoticeToast({ error, message }) {
   const text = error || message;
@@ -45,10 +45,14 @@ export function UpdateSection({
   isDownloadingUpdate,
   isApplyingUpdate,
   onCheckUpdate,
-  onRunPrimaryAction,
+  onDownloadUpdate,
+  onApplyUpdate,
 }) {
-  const isUpdateDisabled =
-    isApplyingUpdate || isDownloadingUpdate || !updateConfig?.enabled || updateInfo?.update_available === false;
+  const hasUpdate = Boolean(updateInfo?.update_available);
+  const hasDownloadedUpdate = Boolean(updateInfo?.downloaded_path);
+  const isBusy = isApplyingUpdate || isDownloadingUpdate || isCheckingUpdate;
+  const isDownloadDisabled = isBusy || !updateConfig?.enabled || !hasUpdate || hasDownloadedUpdate;
+  const isApplyDisabled = isBusy || !updateConfig?.enabled || !hasUpdate || !hasDownloadedUpdate;
 
   return (
     <section className="setupSection">
@@ -61,9 +65,13 @@ export function UpdateSection({
           <button type="button" className="iconButton compact" title="Kiểm tra lại" onClick={onCheckUpdate} disabled={isCheckingUpdate}>
             <Eye size={15} aria-hidden="true" />
           </button>
-          <button type="button" className="secondaryButton" onClick={onRunPrimaryAction} disabled={isUpdateDisabled}>
+          <button type="button" className="secondaryButton" onClick={onDownloadUpdate} disabled={isDownloadDisabled}>
+            <Download size={15} aria-hidden="true" />
+            {isDownloadingUpdate ? "Đang tải" : hasDownloadedUpdate ? "Đã tải" : "Tải bản mới"}
+          </button>
+          <button type="button" className="primary" onClick={onApplyUpdate} disabled={isApplyDisabled}>
             <RefreshCcw size={15} aria-hidden="true" />
-            {isApplyingUpdate || isDownloadingUpdate ? "Đang xử lý" : "Tải & cập nhật"}
+            {isApplyingUpdate ? "Đang cài" : "Cài & mở lại"}
           </button>
         </div>
       </div>
@@ -74,7 +82,7 @@ export function UpdateSection({
         </label>
         <label className="checkField">
           <input type="checkbox" checked={Boolean(updateConfig?.autoDownload)} onChange={updateConfig?.onAutoDownloadChange} />
-          Tự tải sẵn bản mới
+          Tự tải sẵn khi khởi động
         </label>
       </div>
       {updateConfig?.enabled && isCheckingUpdate && !updateInfo && (
@@ -92,7 +100,14 @@ export function UpdateSection({
                 : `Đang ở bản ${updateInfo.current_version}`}
           </strong>
           {updateInfo.message && <span> · {updateInfo.message}</span>}
+          {updateInfo.asset_name && <span> · Gói: {updateInfo.asset_name}</span>}
           {updateInfo.downloaded_path && <span> · Sẵn sàng: {updateInfo.downloaded_path}</span>}
+          {updateInfo.release_url && (
+            <span>
+              {" · "}
+              <a href={updateInfo.release_url} target="_blank" rel="noreferrer">GitHub release</a>
+            </span>
+          )}
         </div>
       )}
     </section>

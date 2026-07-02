@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from itertools import islice
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -30,7 +31,13 @@ class FileReadResult:
     columns: list[str]
 
 
-def read_tabular_file(path: str | Path, options: FileOptions, nrows: int | None = None) -> FileReadResult:
+def read_tabular_file(
+    path: str | Path,
+    options: FileOptions,
+    nrows: int | None = None,
+    file_hash: str | None = None,
+    fast_sample: bool = False,
+) -> FileReadResult:
     """Read an Excel/CSV file into a cleaned pandas DataFrame."""
     file_path = Path(path).expanduser().resolve()
     if not file_path.exists():
@@ -51,7 +58,7 @@ def read_tabular_file(path: str | Path, options: FileOptions, nrows: int | None 
     if extension in {".csv", ".tsv"}:
         dataframe = _read_csv(pd, file_path, options, extension, nrows)
     else:
-        dataframe = _read_excel(pd, file_path, options, extension, nrows)
+        dataframe = _read_excel(pd, file_path, options, extension, nrows, fast_sample=fast_sample)
 
     dataframe = _apply_column_renames(
         _drop_skipped_columns(_clean_dataframe(dataframe), options.skip_columns),
@@ -60,7 +67,7 @@ def read_tabular_file(path: str | Path, options: FileOptions, nrows: int | None 
     return FileReadResult(
         dataframe=dataframe,
         file_path=file_path,
-        file_hash=calculate_md5(file_path),
+        file_hash=file_hash or calculate_md5(file_path),
         row_count=len(dataframe),
         columns=[str(column) for column in dataframe.columns],
     )
@@ -104,8 +111,22 @@ def _reject_html_file(path: Path) -> None:
         )
 
 
-def _read_excel(pd: Any, path: Path, options: FileOptions, extension: str, nrows: int | None = None) -> "pd.DataFrame":
+def _read_excel(
+    pd: Any,
+    path: Path,
+    options: FileOptions,
+    extension: str,
+    nrows: int | None = None,
+    *,
+    fast_sample: bool = False,
+) -> "pd.DataFrame":
     """Read an Excel workbook with fast engine fallback."""
+    if fast_sample and nrows is not None and _can_use_fast_excel_sample(options):
+        try:
+            return _read_excel_sample_with_calamine(pd, path, options, nrows)
+        except Exception:
+            pass
+
     common_kwargs = {
         "sheet_name": options.sheet,
         "header": options.header_row,
@@ -133,6 +154,35 @@ def _read_excel(pd: Any, path: Path, options: FileOptions, extension: str, nrows
             last_error = exc
 
     raise FileReaderError(f"Could not read Excel file {path}: {last_error}") from last_error
+
+
+def _can_use_fast_excel_sample(options: FileOptions) -> bool:
+    """Return whether direct calamine sample reading can preserve expected options."""
+    return not options.usecols and not options.skip_rows
+
+
+def _read_excel_sample_with_calamine(pd: Any, path: Path, options: FileOptions, nrows: int) -> "pd.DataFrame":
+    """Read a small Excel sample directly through python-calamine."""
+    from python_calamine import load_workbook
+
+    workbook = load_workbook(str(path))
+    sheet_value = options.sheet
+    sheet = workbook.get_sheet_by_index(sheet_value) if isinstance(sheet_value, int) else workbook.get_sheet_by_name(str(sheet_value))
+    header_row = max(0, int(options.header_row or 0))
+    rows = list(islice(sheet.iter_rows(), header_row + 1 + max(0, int(nrows))))
+    if len(rows) <= header_row:
+        return pd.DataFrame()
+    header = list(rows[header_row])
+    width = len(header)
+    data = [_fit_row_width(list(row), width) for row in rows[header_row + 1 :]]
+    return pd.DataFrame(data, columns=header)
+
+
+def _fit_row_width(row: list[Any], width: int) -> list[Any]:
+    """Pad or trim a row to match the header width."""
+    if len(row) >= width:
+        return row[:width]
+    return [*row, *([None] * (width - len(row)))]
 
 
 def _clean_dataframe(dataframe: "pd.DataFrame") -> "pd.DataFrame":

@@ -62,6 +62,18 @@ class FileReaderCleaningTests(unittest.TestCase):
             with self.assertRaisesRegex(FileReaderError, "not a real Excel/CSV file"):
                 read_tabular_file(path, FileOptions())
 
+    def test_fast_sample_reads_excel_subset(self) -> None:
+        import pandas as pd
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.xlsx"
+            pd.DataFrame({"Name": ["A", "B", "C"], "Amount": [1, 2, 3]}).to_excel(path, index=False)
+
+            result = read_tabular_file(path, FileOptions(), nrows=2, fast_sample=True)
+
+            self.assertEqual(result.row_count, 2)
+            self.assertEqual(result.columns, ["Name", "Amount"])
+
 
 if __name__ == "__main__":
     unittest.main()
